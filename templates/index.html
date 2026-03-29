@@ -11,10 +11,32 @@
     <h1>Vokabeltrainer</h1>
     <p class="muted">Datensätze in CSV: {{ total }}</p>
 
+    {% if message %}
+      <div class="card {{ 'ok' if status == 'ok' else 'error' }}">{{ message }}</div>
+    {% endif %}
+
+    <form action="{{ url_for('add_vocab') }}" method="post" class="card grid">
+      <h2>Neue Vokabel einfügen</h2>
+      <label>Fremdsprache
+        <input type="text" name="fremdsprache" required>
+      </label>
+      <label>Deutsch
+        <input type="text" name="deutsch" required>
+      </label>
+      <label>Deklinations-Info (optional)
+        <input type="text" name="deklination">
+      </label>
+      <label>Lektion
+        <input type="text" name="lektion" placeholder="z.B. 1" required>
+      </label>
+      <button type="submit">Vokabel speichern</button>
+    </form>
+
     {% if error %}
       <div class="card error">{{ error }}</div>
     {% else %}
       <form action="{{ url_for('start') }}" method="post" class="card grid">
+        <h2>Lernen starten</h2>
         <label>Modus
           <select name="mode" id="mode-select">
             <option value="kartei">Kartei</option>

@@ -135,11 +135,66 @@ def _build_queue(vokabeln, mode, selected_lektionen, block_size, block_selection
 @app.get("/")
 def index():
     vokabeln = lade_vokabeln_full()
+    status = request.args.get("status")
+    message = request.args.get("message")
     return render_template(
         "index.html",
         lektionen=alle_lektionen(vokabeln),
         total=len(vokabeln),
         error=None if vokabeln else "vokabeln.csv wurde nicht gefunden oder ist leer.",
+        status=status,
+        message=message,
+    )
+
+
+@app.post("/add_vocab")
+def add_vocab():
+    fremdsprache = (request.form.get("fremdsprache") or "").strip()
+    deutsch = (request.form.get("deutsch") or "").strip()
+    deklination = (request.form.get("deklination") or "").strip()
+    lektion = (request.form.get("lektion") or "").strip()
+
+    if not fremdsprache or not deutsch or not lektion:
+        return redirect(
+            url_for(
+                "index",
+                status="error",
+                message="Bitte Fremdsprache, Deutsch und Lektion ausfuellen.",
+            )
+        )
+
+    master = lade_vokabeln_full()
+    new_uid = _make_uid(
+        {"fremdsprache": fremdsprache, "deutsch": deutsch, "lektion": lektion}
+    )
+    for v in master:
+        if _make_uid(v) == new_uid:
+            return redirect(
+                url_for(
+                    "index",
+                    status="error",
+                    message="Diese Vokabel existiert bereits in der gewaehlten Lektion.",
+                )
+            )
+
+    master.append(
+        {
+            "fremdsprache": fremdsprache,
+            "deutsch": deutsch,
+            "deklination": deklination,
+            "lektion": lektion,
+            "richtig": 0,
+            "falsch": 0,
+        }
+    )
+    speichere_vokabeln_full(master)
+
+    return redirect(
+        url_for(
+            "index",
+            status="ok",
+            message=f"Vokabel gespeichert: {fremdsprache} -> {deutsch}",
+        )
     )
 
 
