@@ -175,3 +175,22 @@ ls -lah vokabeln.csv
 ```
 
 Wenn `vokabeln.csv` fehlt oder leer ist, zeigt die Startseite eine Fehlmeldung.
+
+## Hinweis: Wenn `vokabeltrainer.service` nicht gefunden wird
+
+In manchen Umgebungen (z. B. Docker-Container ohne systemd) funktioniert `systemctl` nicht.
+Dann ist folgende Meldung normal:
+
+- `Unit vokabeltrainer.service not found`
+
+In dem Fall:
+
+```bash
+cd ~/ubuntuVokabeln
+git pull
+source .venv/bin/activate
+pip install -r requirements.txt
+./scripts/run_gunicorn.sh
+```
+
+Die App laeuft dann direkt im aktuellen Terminal auf `PORT` (Standard: `8090`).
