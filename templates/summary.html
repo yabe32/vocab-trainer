@@ -1,0 +1,33 @@
+﻿<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fertig - Vokabeltrainer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <main class="container">
+    <div class="card">
+      <h1>Durchgang fertig</h1>
+      <p><strong>Modus:</strong> {{ mode }}</p>
+      <p><strong>Gesamt:</strong> {{ total }}</p>
+      <p><strong>Richtig:</strong> {{ correct_count }}</p>
+      <p><strong>Falsch:</strong> {{ wrong|length }}</p>
+
+      {% if wrong %}
+        <h2>Falsch beantwortet</h2>
+        <ul>
+          {% for item in wrong %}
+            <li>{{ item.frage }} -> {{ item.expected }} (deine Antwort: {{ item.answer or '(leer)' }})</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+
+      <form action="{{ url_for('reset_state') }}" method="post">
+        <button type="submit">Neuen Durchgang starten</button>
+      </form>
+    </div>
+  </main>
+</body>
+</html>

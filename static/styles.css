@@ -1,0 +1,121 @@
+﻿:root {
+  --bg: #f8fafc;
+  --text: #0f172a;
+  --muted: #475569;
+  --card: #ffffff;
+  --accent: #0ea5e9;
+  --ok: #065f46;
+  --error: #7f1d1d;
+  --border: #cbd5e1;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  color: var(--text);
+  background: linear-gradient(120deg, #e0f2fe, var(--bg));
+}
+
+.container {
+  max-width: 760px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 1rem 1.25rem;
+  box-shadow: 0 10px 25px rgba(15, 23, 42, 0.08);
+}
+
+.grid {
+  display: grid;
+  gap: 0.85rem;
+}
+
+label,
+legend,
+p,
+li {
+  line-height: 1.5;
+}
+
+input,
+select,
+button {
+  width: 100%;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 1rem;
+}
+
+button,
+.button {
+  background: var(--accent);
+  color: white;
+  border: none;
+  cursor: pointer;
+  text-align: center;
+  text-decoration: none;
+  display: inline-block;
+}
+
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem;
+}
+
+.lesson-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 0.4rem;
+}
+
+.lesson-grid label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.lesson-grid input {
+  width: auto;
+}
+
+.muted,
+.hint {
+  color: var(--muted);
+}
+
+.block-settings {
+  display: grid;
+  gap: 0.7rem;
+  border: 1px dashed var(--border);
+  padding: 0.7rem;
+  border-radius: 10px;
+}
+
+.hidden {
+  display: none;
+}
+
+.ok {
+  border-color: #6ee7b7;
+}
+
+.error {
+  border-color: #fca5a5;
+}
+
+@media (max-width: 600px) {
+  .container {
+    margin: 1rem auto;
+  }
+}

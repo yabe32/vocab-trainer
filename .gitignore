@@ -1,0 +1,6 @@
+﻿__pycache__/
+*.pyc
+.venv/
+progress_save/
+progress_blocks.json
+.env

@@ -1,0 +1,23 @@
+﻿<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Feedback - Vokabeltrainer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <main class="container">
+    <div class="card {{ 'ok' if correct else 'error' }}">
+      {% if correct %}
+        <h2>Richtig</h2>
+      {% else %}
+        <h2>Falsch</h2>
+        <p><strong>Deine Antwort:</strong> {{ user_answer or '(leer)' }}</p>
+        <p><strong>Richtig wäre:</strong> {{ expected }}</p>
+      {% endif %}
+      <a class="button" href="{{ url_for('next_question') }}">Nächste Frage</a>
+    </div>
+  </main>
+</body>
+</html>

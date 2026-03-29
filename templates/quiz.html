@@ -1,0 +1,38 @@
+﻿<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lernen - Vokabeltrainer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <main class="container">
+    <div class="card">
+      <p class="muted">{{ current }} / {{ total }} | Modus: {{ mode }}</p>
+      <h2>{{ vokabel.fremdsprache }}</h2>
+      {% if vokabel.deklination %}
+        <p><strong>Deklinations-Info:</strong> {{ vokabel.deklination }}</p>
+      {% endif %}
+      {% if mode == "deklination" %}
+        <p>Gib die Deklinationsinfo ein:</p>
+      {% elif mode == "abschreiben" %}
+        <p><strong>Deutsch:</strong> {{ vokabel.deutsch }}</p>
+        <p>Bitte abschreiben und dann weiter.</p>
+      {% else %}
+        <p>Gib die deutsche Bedeutung ein:</p>
+      {% endif %}
+
+      <form action="{{ url_for('answer') }}" method="post" class="grid">
+        <input type="hidden" name="uid" value="{{ uid }}">
+        {% if mode == "abschreiben" %}
+          <button type="submit">Weiter</button>
+        {% else %}
+          <input type="text" name="answer" autocomplete="off" autofocus required>
+          <button type="submit">Antwort prüfen</button>
+        {% endif %}
+      </form>
+    </div>
+  </main>
+</body>
+</html>

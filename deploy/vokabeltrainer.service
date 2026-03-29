@@ -1,0 +1,15 @@
+﻿[Unit]
+Description=Vokabeltrainer Flask App
+After=network.target
+
+[Service]
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/ubuntuVokabeln
+EnvironmentFile=/home/ubuntu/ubuntuVokabeln/.env
+ExecStart=/home/ubuntu/ubuntuVokabeln/.venv/bin/gunicorn --workers 2 --bind 0.0.0.0:${PORT} wsgi:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
