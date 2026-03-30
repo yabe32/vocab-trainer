@@ -326,6 +326,22 @@ def index():
     )
 
 
+@app.get("/audio_files")
+def audio_files():
+    files = []
+    for path in sorted(AUDIO_CACHE_DIR.glob("*.mp3"), key=lambda p: p.name.lower()):
+        stat = path.stat()
+        files.append(
+            {
+                "name": path.name,
+                "size_kb": round(stat.st_size / 1024, 1),
+                "audio_url": url_for("static", filename=f"audio_cache/{path.name}"),
+            }
+        )
+
+    return render_template("audio_files.html", files=files, total=len(files))
+
+
 @app.post("/build_tts_cache")
 def build_tts_cache():
     vokabeln = lade_vokabeln_full()

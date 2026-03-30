@@ -15,6 +15,11 @@
       <div class="card {{ 'ok' if status == 'ok' else 'error' }}">{{ message }}</div>
     {% endif %}
 
+    <div class="card grid">
+      <h2>Audio Übersicht</h2>
+      <a class="button" href="{{ url_for('audio_files') }}">Alle Audio-Dateien anzeigen</a>
+    </div>
+
     <form action="{{ url_for('set_api_key') }}" method="post" class="card grid">
       <h2>OpenAI API Key</h2>
       <label>API Key (wird serverseitig gespeichert)

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Audio-Dateien - Vokabeltrainer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <main class="container">
+    <div class="card">
+      <h1>Audio-Dateien</h1>
+      <p class="muted">Gesamt: {{ total }}</p>
+      <a class="button secondary" href="{{ url_for('index') }}">Zurück zur Startseite</a>
+    </div>
+
+    <div class="card">
+      {% if files %}
+        <table class="audio-table">
+          <thead>
+            <tr>
+              <th>Datei</th>
+              <th>Größe</th>
+              <th>Abspielen</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for f in files %}
+              <tr>
+                <td>{{ f.name }}</td>
+                <td>{{ f.size_kb }} KB</td>
+                <td><audio controls preload="none" src="{{ f.audio_url }}"></audio></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p>Noch keine Audio-Dateien im Cache.</p>
+      {% endif %}
+    </div>
+  </main>
+</body>
+</html>

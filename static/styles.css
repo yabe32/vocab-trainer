@@ -92,6 +92,24 @@ button.secondary {
   margin: 0;
 }
 
+.audio-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.audio-table th,
+.audio-table td {
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  padding: 0.55rem 0.35rem;
+  vertical-align: middle;
+}
+
+.audio-table audio {
+  width: 260px;
+  max-width: 100%;
+}
+
 fieldset {
   border: 1px solid var(--border);
   border-radius: 10px;
