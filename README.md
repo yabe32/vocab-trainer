@@ -93,6 +93,9 @@ OpenAI API Key setzen (`.env`):
 echo "OPENAI_API_KEY=dein_key" >> .env
 ```
 
+Alternativ kannst du den Key auf der Startseite im Browser speichern.
+Dann liegt er serverseitig in `data/runtime_secrets.json` (nicht im Git-Repo).
+
 ## 3) Testweise starten
 
 ```bash

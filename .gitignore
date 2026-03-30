@@ -8,3 +8,4 @@ data/vokabeln.csv
 .autoupdate.log
 .gunicorn.log
 static/audio_cache/
+data/runtime_secrets.json

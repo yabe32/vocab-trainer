@@ -1,5 +1,6 @@
 ﻿import csv
 import hashlib
+import json
 import os
 import random
 import shutil
@@ -28,6 +29,7 @@ FIELDNAMES = ["fremdsprache", "deutsch", "deklination", "lektion", "richtig", "f
 TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
 TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "alloy")
 _OPENAI_CLIENT = None
+RUNTIME_SECRETS_FILE = BASE_DIR / "data" / "runtime_secrets.json"
 
 
 def _resolve_vokabel_datei():
@@ -53,6 +55,30 @@ def _resolve_vokabel_datei():
 VOKABEL_DATEI = _resolve_vokabel_datei()
 
 
+def _load_runtime_secrets():
+    if not RUNTIME_SECRETS_FILE.exists():
+        return {}
+    try:
+        with RUNTIME_SECRETS_FILE.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_runtime_secrets(data):
+    RUNTIME_SECRETS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with RUNTIME_SECRETS_FILE.open("w", encoding="utf-8") as f:
+        json.dump(data, f)
+
+
+def _get_effective_openai_api_key():
+    runtime_key = _load_runtime_secrets().get("OPENAI_API_KEY", "").strip()
+    if runtime_key:
+        return runtime_key
+    return os.getenv("OPENAI_API_KEY", "").strip()
+
+
 def _get_openai_client():
     global _OPENAI_CLIENT
     if OpenAI is None:
@@ -60,7 +86,7 @@ def _get_openai_client():
     if _OPENAI_CLIENT is not None:
         return _OPENAI_CLIENT
 
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    api_key = _get_effective_openai_api_key()
     if not api_key:
         return None
 
@@ -253,7 +279,8 @@ def index():
     vokabeln = lade_vokabeln_full()
     status = request.args.get("status")
     message = request.args.get("message")
-    tts_ready = _get_openai_client() is not None
+    has_runtime_key = bool(_load_runtime_secrets().get("OPENAI_API_KEY", "").strip())
+    tts_ready = bool(_get_effective_openai_api_key()) and (_get_openai_client() is not None)
     return render_template(
         "index.html",
         lektionen=alle_lektionen(vokabeln),
@@ -262,6 +289,7 @@ def index():
         status=status,
         message=message,
         tts_ready=tts_ready,
+        has_runtime_key=has_runtime_key,
     )
 
 
@@ -284,6 +312,26 @@ def build_tts_cache():
     msg = f"Audio-Cache fertig: neu={created}, bereits da={existing}, fehlgeschlagen={failed}"
     status = "ok" if failed == 0 else "error"
     return redirect(url_for("index", status=status, message=msg))
+
+
+@app.post("/set_api_key")
+def set_api_key():
+    global _OPENAI_CLIENT
+
+    api_key = (request.form.get("openai_api_key") or "").strip()
+    secrets = _load_runtime_secrets()
+
+    if not api_key:
+        if "OPENAI_API_KEY" in secrets:
+            del secrets["OPENAI_API_KEY"]
+            _save_runtime_secrets(secrets)
+        _OPENAI_CLIENT = None
+        return redirect(url_for("index", status="ok", message="Browser-API-Key wurde entfernt."))
+
+    secrets["OPENAI_API_KEY"] = api_key
+    _save_runtime_secrets(secrets)
+    _OPENAI_CLIENT = None
+    return redirect(url_for("index", status="ok", message="API-Key im Browser gespeichert."))
 
 
 @app.post("/add_vocab")
