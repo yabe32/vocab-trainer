@@ -222,6 +222,7 @@ def start():
         "queue": queue,
         "index": 0,
         "wrong": [],
+        "last_feedback": None,
     }
 
     return redirect(url_for("quiz"))
@@ -271,6 +272,7 @@ def answer():
 
     if mode == "abschreiben":
         state["index"] = idx + 1
+        state["last_feedback"] = None
         session["state"] = state
         return redirect(url_for("quiz"))
 
@@ -281,12 +283,18 @@ def answer():
     if not correct:
         state.setdefault("wrong", []).append(
             {
+                "question_idx": idx,
                 "frage": queue[idx]["display"].get("fremdsprache", ""),
                 "expected": expected,
                 "answer": user_answer,
             }
         )
 
+    state["last_feedback"] = {
+        "uid": uid,
+        "was_wrong": (not correct),
+        "question_idx": idx,
+    }
     state["index"] = idx + 1
     session["state"] = state
 
@@ -296,12 +304,43 @@ def answer():
         expected=expected,
         user_answer=user_answer,
         mode=mode,
+        can_mark_correct=(not correct),
     )
 
 
 @app.get("/next")
 def next_question():
     return redirect(url_for("quiz"))
+
+
+@app.post("/mark_correct")
+def mark_correct():
+    state = session.get("state")
+    if not state:
+        return redirect(url_for("index"))
+
+    last_feedback = state.get("last_feedback") or {}
+    if not last_feedback.get("was_wrong"):
+        return redirect(url_for("next_question"))
+
+    uid = last_feedback.get("uid", "")
+    question_idx = last_feedback.get("question_idx")
+
+    master = lade_vokabeln_full()
+    for v in master:
+        if _make_uid(v) != uid:
+            continue
+        v["falsch"] = max(0, _to_int(v.get("falsch", 0)) - 1)
+        v["richtig"] = _to_int(v.get("richtig", 0)) + 1
+        break
+    speichere_vokabeln_full(master)
+
+    wrong = state.get("wrong", [])
+    state["wrong"] = [w for w in wrong if w.get("question_idx") != question_idx]
+    state["last_feedback"] = {"uid": uid, "was_wrong": False, "question_idx": question_idx}
+    session["state"] = state
+
+    return redirect(url_for("next_question"))
 
 
 @app.get("/summary")
@@ -326,6 +365,12 @@ def summary():
 
 @app.post("/reset")
 def reset_state():
+    session.pop("state", None)
+    return redirect(url_for("index"))
+
+
+@app.post("/back")
+def back_to_selection():
     session.pop("state", None)
     return redirect(url_for("index"))
 

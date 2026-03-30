@@ -8,6 +8,10 @@
 </head>
 <body>
   <main class="container">
+    <form action="{{ url_for('back_to_selection') }}" method="post" class="topbar-form">
+      <button type="submit" class="button secondary">Zur Auswahl</button>
+    </form>
+
     <div class="card">
       <p class="muted">{{ current }} / {{ total }} | Modus: {{ mode }}</p>
       <h2>{{ vokabel.fremdsprache }}</h2>

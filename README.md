@@ -13,6 +13,9 @@ Dieses Projekt ist eine Web-Version deines bisherigen Konsolenprogramms.
 - Deklinations-Modus
 - Block-Modus (Blockgröße, Blockauswahl, Wiederholungen)
 - Fehler-Modus (höchste Fehler zuerst)
+- Browser-Formular zum Hinzufügen neuer Vokabeln
+- "Doch als richtig werten"-Button nach einer falschen Antwort
+- "Zur Auswahl"-Button auf Lern-/Feedback-/Ergebnis-Seiten
 
 ## Projektstruktur
 
@@ -148,6 +151,29 @@ Das macht:
 - `git pull`
 - `pip install -r requirements.txt`
 - `systemctl restart vokabeltrainer`
+
+## 7) Automatische Updates aktivieren
+
+Wenn du willst, dass der Server automatisch neue GitHub-Commits einspielt:
+
+```bash
+cd ~/ubuntuVokabeln
+chmod +x scripts/*.sh
+./scripts/install_autoupdate_cron.sh
+```
+
+Das richtet einen Cronjob ein, der jede Minute prüft, ob `origin/main` neuer ist.
+Bei einem neuen Commit wird automatisch:
+
+- `git pull`
+- `pip install -r requirements.txt`
+- App-Neustart (`systemd`, sonst Gunicorn-Neustart)
+
+Logs:
+
+```bash
+tail -f ~/ubuntuVokabeln/.autoupdate.log
+```
 
 ## Optional: Domain + HTTPS (Nginx + Let's Encrypt)
 

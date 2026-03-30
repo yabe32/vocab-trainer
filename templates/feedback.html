@@ -8,6 +8,10 @@
 </head>
 <body>
   <main class="container">
+    <form action="{{ url_for('back_to_selection') }}" method="post" class="topbar-form">
+      <button type="submit" class="button secondary">Zur Auswahl</button>
+    </form>
+
     <div class="card {{ 'ok' if correct else 'error' }}">
       {% if correct %}
         <h2>Richtig</h2>
@@ -16,7 +20,15 @@
         <p><strong>Deine Antwort:</strong> {{ user_answer or '(leer)' }}</p>
         <p><strong>Richtig wäre:</strong> {{ expected }}</p>
       {% endif %}
-      <a class="button" href="{{ url_for('next_question') }}">Nächste Frage</a>
+
+      <div class="actions">
+        {% if can_mark_correct %}
+          <form action="{{ url_for('mark_correct') }}" method="post">
+            <button type="submit" class="secondary">Doch als richtig werten</button>
+          </form>
+        {% endif %}
+        <a class="button" href="{{ url_for('next_question') }}">Nächste Frage</a>
+      </div>
     </div>
   </main>
 </body>
