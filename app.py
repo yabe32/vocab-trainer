@@ -30,7 +30,7 @@ FIELDNAMES = ["fremdsprache", "deutsch", "deklination", "lektion", "richtig", "f
 TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
 TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "alloy")
 TTS_DELAY_SECONDS = float(os.getenv("TTS_DELAY_SECONDS", "0.8"))
-TTS_MAX_NEW_PER_RUN = int(os.getenv("TTS_MAX_NEW_PER_RUN", "50"))
+TTS_MAX_NEW_PER_RUN = int(os.getenv("TTS_MAX_NEW_PER_RUN", "0"))
 _OPENAI_CLIENT = None
 RUNTIME_SECRETS_FILE = BASE_DIR / "data" / "runtime_secrets.json"
 TTS_BUILD_LOCK_FILE = BASE_DIR / "data" / "tts_build.lock"
@@ -149,7 +149,11 @@ def _generate_tts_audio_sync(uid, kind, text):
     if not rel_path:
         return None
     abs_path = BASE_DIR / "static" / rel_path
-    return rel_path if abs_path.exists() else None
+    if not abs_path.exists():
+        return None
+    if abs_path.stat().st_size <= 0:
+        return None
+    return rel_path
 
 
 def _build_tts_cache(vokabeln):

@@ -100,8 +100,10 @@ Optionale Drosselung fuer den Audio-Build (`.env`):
 
 ```bash
 echo "TTS_DELAY_SECONDS=0.8" >> .env
-echo "TTS_MAX_NEW_PER_RUN=50" >> .env
+echo "TTS_MAX_NEW_PER_RUN=0" >> .env
 ```
+
+`TTS_MAX_NEW_PER_RUN=0` bedeutet: alle fehlenden Audios in einem Lauf erzeugen.
 
 ## 3) Testweise starten
 
