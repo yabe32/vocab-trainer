@@ -143,6 +143,15 @@ def _ensure_tts_audio(uid, kind, text):
             return None
 
 
+def _generate_tts_audio_sync(uid, kind, text):
+    """Generate exactly one audio file synchronously (blocking)."""
+    rel_path = _ensure_tts_audio(uid, kind, text)
+    if not rel_path:
+        return None
+    abs_path = BASE_DIR / "static" / rel_path
+    return rel_path if abs_path.exists() else None
+
+
 def _build_tts_cache(vokabeln):
     created = 0
     existing = 0
@@ -161,7 +170,9 @@ def _build_tts_cache(vokabeln):
                 existing += 1
                 continue
 
-            made = _ensure_tts_audio(uid, kind, cleaned)
+            # Strictly sequential: one blocking API call, wait until file is written,
+            # then continue with the next word.
+            made = _generate_tts_audio_sync(uid, kind, cleaned)
             if made:
                 created += 1
                 time.sleep(max(0.0, TTS_DELAY_SECONDS))
