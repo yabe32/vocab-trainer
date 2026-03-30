@@ -4,3 +4,6 @@
 progress_save/
 progress_blocks.json
 .env
+data/vokabeln.csv
+.autoupdate.log
+.gunicorn.log

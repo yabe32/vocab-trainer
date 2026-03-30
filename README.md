@@ -2,7 +2,7 @@
 
 Dieses Projekt ist eine Web-Version deines bisherigen Konsolenprogramms.
 
-- Datenquelle bleibt: `vokabeln.csv`
+- Datenquelle: `data/vokabeln.csv` (lokal auf dem Server)
 - Browser-Zugriff: `http://SERVER-IP:8090`
 - Fortschritt pro Frage (`richtig` / `falsch`) wird direkt in der CSV gespeichert.
 
@@ -152,6 +152,22 @@ Das macht:
 - `pip install -r requirements.txt`
 - `systemctl restart vokabeltrainer`
 
+### Wenn `git pull` wegen lokaler Aenderungen blockiert
+
+Einmalig auf dem Server ausfuehren:
+
+```bash
+cd ~/ubuntuVokabeln
+mkdir -p data
+[ -f data/vokabeln.csv ] || cp vokabeln.csv data/vokabeln.csv
+echo "VOKABEL_DATEI=data/vokabeln.csv" >> .env
+git restore --staged vokabeln.csv 2>/dev/null || true
+git restore vokabeln.csv 2>/dev/null || true
+./scripts/update_and_restart.sh
+```
+
+Danach schreibt die App in `data/vokabeln.csv` und `git pull` kollidiert nicht mehr mit deinem Lernstand.
+
 ## 7) Automatische Updates aktivieren
 
 Wenn du willst, dass der Server automatisch neue GitHub-Commits einspielt:
@@ -197,10 +213,10 @@ sudo systemctl restart vokabeltrainer
 Prüfen, ob Datei da ist:
 
 ```bash
-ls -lah vokabeln.csv
+ls -lah data/vokabeln.csv
 ```
 
-Wenn `vokabeln.csv` fehlt oder leer ist, zeigt die Startseite eine Fehlmeldung.
+Wenn `data/vokabeln.csv` fehlt oder leer ist, zeigt die Startseite eine Fehlmeldung.
 
 ## Hinweis: Wenn `vokabeltrainer.service` nicht gefunden wird
 

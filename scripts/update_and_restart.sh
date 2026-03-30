@@ -2,7 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-git pull
+git pull --rebase --autostash
 
 source .venv/bin/activate
 pip install -r requirements.txt

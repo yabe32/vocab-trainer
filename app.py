@@ -1,6 +1,7 @@
 ﻿import csv
 import os
 import random
+import shutil
 import threading
 from pathlib import Path
 
@@ -10,9 +11,34 @@ app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-this-in-production")
 
 BASE_DIR = Path(__file__).resolve().parent
-VOKABEL_DATEI = BASE_DIR / "vokabeln.csv"
+DEFAULT_VOKABEL_DATEI = BASE_DIR / "data" / "vokabeln.csv"
+SEED_VOKABEL_DATEI = BASE_DIR / "data" / "vokabeln.seed.csv"
+LEGACY_VOKABEL_DATEI = BASE_DIR / "vokabeln.csv"
 DATA_LOCK = threading.Lock()
 FIELDNAMES = ["fremdsprache", "deutsch", "deklination", "lektion", "richtig", "falsch"]
+
+
+def _resolve_vokabel_datei():
+    env_path = os.getenv("VOKABEL_DATEI")
+    if env_path:
+        p = Path(env_path).expanduser()
+        if not p.is_absolute():
+            p = (BASE_DIR / p).resolve()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
+
+    DEFAULT_VOKABEL_DATEI.parent.mkdir(parents=True, exist_ok=True)
+
+    if not DEFAULT_VOKABEL_DATEI.exists():
+        if LEGACY_VOKABEL_DATEI.exists():
+            shutil.copy2(LEGACY_VOKABEL_DATEI, DEFAULT_VOKABEL_DATEI)
+        elif SEED_VOKABEL_DATEI.exists():
+            shutil.copy2(SEED_VOKABEL_DATEI, DEFAULT_VOKABEL_DATEI)
+
+    return DEFAULT_VOKABEL_DATEI
+
+
+VOKABEL_DATEI = _resolve_vokabel_datei()
 
 
 def _to_int(value):
@@ -141,7 +167,7 @@ def index():
         "index.html",
         lektionen=alle_lektionen(vokabeln),
         total=len(vokabeln),
-        error=None if vokabeln else "vokabeln.csv wurde nicht gefunden oder ist leer.",
+        error=None if vokabeln else f"{VOKABEL_DATEI} wurde nicht gefunden oder ist leer.",
         status=status,
         message=message,
     )
