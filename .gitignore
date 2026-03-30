@@ -7,3 +7,4 @@ progress_blocks.json
 data/vokabeln.csv
 .autoupdate.log
 .gunicorn.log
+static/audio_cache/

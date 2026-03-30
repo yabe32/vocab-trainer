@@ -15,6 +15,10 @@
     <div class="card">
       <p class="muted">{{ current }} / {{ total }} | Modus: {{ mode }}</p>
       <h2>{{ vokabel.fremdsprache }}</h2>
+      {% if question_audio_url %}
+        <audio id="question-audio" src="{{ question_audio_url }}" preload="auto" autoplay></audio>
+        <button id="play-question-audio" type="button" class="secondary">Nochmal vorspielen</button>
+      {% endif %}
       {% if vokabel.deklination %}
         <p><strong>Deklinations-Info:</strong> {{ vokabel.deklination }}</p>
       {% endif %}
@@ -46,6 +50,18 @@
       event.preventDefault();
       backForm.submit();
     });
+
+    const questionAudio = document.getElementById("question-audio");
+    const playQuestionBtn = document.getElementById("play-question-audio");
+    if (questionAudio) {
+      questionAudio.play().catch(() => {});
+    }
+    if (questionAudio && playQuestionBtn) {
+      playQuestionBtn.addEventListener("click", function () {
+        questionAudio.currentTime = 0;
+        questionAudio.play().catch(() => {});
+      });
+    }
   </script>
 </body>
 </html>

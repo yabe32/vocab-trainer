@@ -21,6 +21,11 @@
         <p><strong>Richtig wäre:</strong> {{ expected }}</p>
       {% endif %}
 
+      {% if answer_audio_url %}
+        <audio id="answer-audio" src="{{ answer_audio_url }}" preload="auto" autoplay></audio>
+        <button id="play-answer-audio" type="button" class="secondary">Übersetzung nochmal vorspielen</button>
+      {% endif %}
+
       <div class="actions">
         {% if can_mark_correct %}
           <form action="{{ url_for('mark_correct') }}" method="post">
@@ -52,6 +57,18 @@
       event.preventDefault();
       nextForm.submit();
     });
+
+    const answerAudio = document.getElementById("answer-audio");
+    const playAnswerBtn = document.getElementById("play-answer-audio");
+    if (answerAudio) {
+      answerAudio.play().catch(() => {});
+    }
+    if (answerAudio && playAnswerBtn) {
+      playAnswerBtn.addEventListener("click", function () {
+        answerAudio.currentTime = 0;
+        answerAudio.play().catch(() => {});
+      });
+    }
   </script>
 </body>
 </html>

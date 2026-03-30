@@ -1,4 +1,5 @@
 ﻿import csv
+import hashlib
 import os
 import random
 import shutil
@@ -7,6 +8,11 @@ from pathlib import Path
 
 from flask import Flask, redirect, render_template, request, session, url_for
 
+try:
+    from openai import OpenAI
+except Exception:
+    OpenAI = None
+
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-this-in-production")
 
@@ -14,8 +20,14 @@ BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_VOKABEL_DATEI = BASE_DIR / "data" / "vokabeln.csv"
 SEED_VOKABEL_DATEI = BASE_DIR / "data" / "vokabeln.seed.csv"
 LEGACY_VOKABEL_DATEI = BASE_DIR / "vokabeln.csv"
+AUDIO_CACHE_DIR = BASE_DIR / "static" / "audio_cache"
+AUDIO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 DATA_LOCK = threading.Lock()
+TTS_LOCK = threading.Lock()
 FIELDNAMES = ["fremdsprache", "deutsch", "deklination", "lektion", "richtig", "falsch"]
+TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
+TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "alloy")
+_OPENAI_CLIENT = None
 
 
 def _resolve_vokabel_datei():
@@ -39,6 +51,84 @@ def _resolve_vokabel_datei():
 
 
 VOKABEL_DATEI = _resolve_vokabel_datei()
+
+
+def _get_openai_client():
+    global _OPENAI_CLIENT
+    if OpenAI is None:
+        return None
+    if _OPENAI_CLIENT is not None:
+        return _OPENAI_CLIENT
+
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return None
+
+    _OPENAI_CLIENT = OpenAI(api_key=api_key)
+    return _OPENAI_CLIENT
+
+
+def _audio_rel_path(uid, kind, text):
+    digest = hashlib.sha1(f"{uid}|{kind}|{text}".encode("utf-8")).hexdigest()[:20]
+    return f"audio_cache/{kind}_{digest}.mp3"
+
+
+def _ensure_tts_audio(uid, kind, text):
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return None
+
+    rel_path = _audio_rel_path(uid, kind, cleaned)
+    abs_path = BASE_DIR / "static" / rel_path
+    abs_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if abs_path.exists():
+        return rel_path
+
+    client = _get_openai_client()
+    if client is None:
+        return None
+
+    with TTS_LOCK:
+        if abs_path.exists():
+            return rel_path
+        try:
+            response = client.audio.speech.create(
+                model=TTS_MODEL,
+                voice=TTS_VOICE,
+                input=cleaned,
+            )
+            response.stream_to_file(str(abs_path))
+            return rel_path
+        except Exception:
+            return None
+
+
+def _build_tts_cache(vokabeln):
+    created = 0
+    existing = 0
+    failed = 0
+
+    for v in vokabeln:
+        uid = _make_uid(v)
+        for kind, text in (("lat", v.get("fremdsprache", "")), ("de", v.get("deutsch", ""))):
+            cleaned = (text or "").strip()
+            if not cleaned:
+                continue
+
+            rel_path = _audio_rel_path(uid, kind, cleaned)
+            abs_path = BASE_DIR / "static" / rel_path
+            if abs_path.exists():
+                existing += 1
+                continue
+
+            made = _ensure_tts_audio(uid, kind, cleaned)
+            if made:
+                created += 1
+            else:
+                failed += 1
+
+    return created, existing, failed
 
 
 def _to_int(value):
@@ -163,6 +253,7 @@ def index():
     vokabeln = lade_vokabeln_full()
     status = request.args.get("status")
     message = request.args.get("message")
+    tts_ready = _get_openai_client() is not None
     return render_template(
         "index.html",
         lektionen=alle_lektionen(vokabeln),
@@ -170,7 +261,29 @@ def index():
         error=None if vokabeln else f"{VOKABEL_DATEI} wurde nicht gefunden oder ist leer.",
         status=status,
         message=message,
+        tts_ready=tts_ready,
     )
+
+
+@app.post("/build_tts_cache")
+def build_tts_cache():
+    vokabeln = lade_vokabeln_full()
+    if not vokabeln:
+        return redirect(url_for("index", status="error", message="Keine Vokabeln gefunden."))
+
+    if _get_openai_client() is None:
+        return redirect(
+            url_for(
+                "index",
+                status="error",
+                message="OPENAI_API_KEY fehlt. Bitte in .env setzen und App neu starten.",
+            )
+        )
+
+    created, existing, failed = _build_tts_cache(vokabeln)
+    msg = f"Audio-Cache fertig: neu={created}, bereits da={existing}, fehlgeschlagen={failed}"
+    status = "ok" if failed == 0 else "error"
+    return redirect(url_for("index", status=status, message=msg))
 
 
 @app.post("/add_vocab")
@@ -269,6 +382,8 @@ def quiz():
     item = queue[idx]
     v = item["display"]
     mode = state.get("mode", "kartei")
+    audio_rel = _ensure_tts_audio(item["uid"], "lat", v.get("fremdsprache", ""))
+    question_audio_url = url_for("static", filename=audio_rel) if audio_rel else None
 
     return render_template(
         "quiz.html",
@@ -277,6 +392,7 @@ def quiz():
         total=len(queue),
         vokabel=v,
         uid=item["uid"],
+        question_audio_url=question_audio_url,
     )
 
 
@@ -324,6 +440,10 @@ def answer():
     state["index"] = idx + 1
     session["state"] = state
 
+    translation_text = queue[idx]["display"].get("deutsch", "")
+    answer_audio_rel = _ensure_tts_audio(uid, "de", translation_text)
+    answer_audio_url = url_for("static", filename=answer_audio_rel) if answer_audio_rel else None
+
     return render_template(
         "feedback.html",
         correct=correct,
@@ -331,6 +451,7 @@ def answer():
         user_answer=user_answer,
         mode=mode,
         can_mark_correct=(not correct),
+        answer_audio_url=answer_audio_url,
     )
 
 

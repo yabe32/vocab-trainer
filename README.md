@@ -16,6 +16,7 @@ Dieses Projekt ist eine Web-Version deines bisherigen Konsolenprogramms.
 - Browser-Formular zum Hinzufügen neuer Vokabeln
 - "Doch als richtig werten"-Button nach einer falschen Antwort
 - "Zur Auswahl"-Button auf Lern-/Feedback-/Ergebnis-Seiten
+- OpenAI Text-to-Speech mit Audio-Cache (pro Wort nur einmal generieren)
 
 ## Projektstruktur
 
@@ -86,6 +87,12 @@ Setup ausführen:
 ./scripts/setup_server.sh
 ```
 
+OpenAI API Key setzen (`.env`):
+
+```bash
+echo "OPENAI_API_KEY=dein_key" >> .env
+```
+
 ## 3) Testweise starten
 
 ```bash
@@ -95,6 +102,9 @@ Setup ausführen:
 Dann im Browser öffnen:
 
 - `http://DEINE_SERVER_IP:8090`
+
+Auf der Startseite einmal `Audio-Dateien jetzt erzeugen` klicken, damit die Audios vorab erstellt werden.
+Danach werden die gespeicherten Dateien genutzt und es fallen keine erneuten TTS-Kosten für bestehende Wörter an.
 
 Abbrechen mit `Ctrl+C`.
 
