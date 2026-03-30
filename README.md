@@ -191,6 +191,34 @@ Logs:
 tail -f ~/ubuntuVokabeln/.autoupdate.log
 ```
 
+### Ohne Cron: Auto-Update-Loop
+
+Wenn `crontab` in deiner Umgebung nicht funktioniert (z. B. manche Docker-Container):
+
+```bash
+cd ~/ubuntuVokabeln
+chmod +x scripts/*.sh
+./scripts/start_autoupdate_loop.sh
+```
+
+Status:
+
+```bash
+./scripts/status_autoupdate_loop.sh
+```
+
+Stoppen:
+
+```bash
+./scripts/stop_autoupdate_loop.sh
+```
+
+Loop-Log:
+
+```bash
+tail -f ~/ubuntuVokabeln/.autoupdate_loop.log
+```
+
 ## Optional: Domain + HTTPS (Nginx + Let's Encrypt)
 
 Wenn du willst, kann man davor Nginx als Reverse Proxy setzen und HTTPS aktivieren.
