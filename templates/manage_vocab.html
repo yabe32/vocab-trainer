@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vokabeln verwalten - Vokabeltrainer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <main class="container">
+    <div class="card">
+      <h1>Vokabeln verwalten</h1>
+      <p class="muted">Gesamt: {{ total }}</p>
+      <a class="button secondary" href="{{ url_for('index') }}">Zurück zur Startseite</a>
+    </div>
+
+    {% for lektion in lessons %}
+      <div class="card">
+        <div class="actions">
+          <h2>Lektion {{ lektion }}</h2>
+          <form action="{{ url_for('delete_lesson') }}" method="post" onsubmit="return confirm('Lektion {{ lektion }} wirklich löschen?');">
+            <input type="hidden" name="lektion" value="{{ lektion }}">
+            <button type="submit" class="danger">Ganze Lektion löschen</button>
+          </form>
+        </div>
+        <table class="audio-table">
+          <thead>
+            <tr>
+              <th>Fremdsprache</th>
+              <th>Deutsch</th>
+              <th>Deklination</th>
+              <th>Aktion</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for v in grouped[lektion] %}
+              <tr>
+                <td>{{ v.fremdsprache }}</td>
+                <td>{{ v.deutsch }}</td>
+                <td>{{ v.deklination }}</td>
+                <td>
+                  <form action="{{ url_for('delete_vocab') }}" method="post" onsubmit="return confirm('Dieses Wort wirklich löschen?');">
+                    <input type="hidden" name="uid" value="{{ v.fremdsprache }}|{{ v.deutsch }}|{{ v.lektion }}">
+                    <button type="submit" class="danger">Wort löschen</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="card">
+        <p>Keine Vokabeln vorhanden.</p>
+      </div>
+    {% endfor %}
+  </main>
+</body>
+</html>

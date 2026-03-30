@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zugriffscode - Vokabeltrainer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <main class="container">
+    <form action="{{ url_for('submit_access_code') }}" method="post" class="card grid">
+      <h1>Zugriffscode</h1>
+      <p>Bitte Code eingeben.</p>
+      {% if error %}
+        <p class="error">{{ error }}</p>
+      {% endif %}
+      <label>Code
+        <input type="password" name="access_code" autocomplete="off" autofocus required>
+      </label>
+      <button type="submit">Weiter</button>
+    </form>
+  </main>
+</body>
+</html>

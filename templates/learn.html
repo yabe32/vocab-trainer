@@ -1,18 +1,20 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="de">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Vokabeltrainer</title>
+  <title>Lernen - Vokabeltrainer</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
   <main class="container">
     <h1>Vokabeltrainer</h1>
+    <p class="muted">Lernmodus</p>
+    <p class="muted">Datensätze in CSV: {{ total }}</p>
+
     <form action="{{ url_for('logout') }}" method="post" class="topbar-form">
       <button type="submit" class="button secondary">Code wechseln</button>
     </form>
-    <p class="muted">Datensätze in CSV: {{ total }}</p>
 
     {% if message %}
       <div class="card {{ 'ok' if status == 'ok' else 'error' }}">{{ message }}</div>
@@ -58,54 +60,6 @@
         <button type="submit">Lernen starten</button>
       </form>
     {% endif %}
-
-    <div class="card grid">
-      <h2>Audio Übersicht</h2>
-      <a class="button" href="{{ url_for('audio_files') }}">Alle Audio-Dateien anzeigen</a>
-      <a class="button secondary" href="{{ url_for('manage_vocab') }}">Vokabeln / Lektionen bearbeiten</a>
-    </div>
-
-    <form action="{{ url_for('set_api_key') }}" method="post" class="card grid">
-      <h2>OpenAI API Key</h2>
-      <label>API Key (wird serverseitig gespeichert)
-        <input type="password" name="openai_api_key" placeholder="sk-..." autocomplete="off">
-      </label>
-      <div class="actions">
-        <button type="submit">Key speichern</button>
-      </div>
-      {% if has_runtime_key %}
-        <p class="hint">Aktuell ist ein Browser-Key gespeichert. Leeres Feld absenden entfernt ihn wieder.</p>
-      {% else %}
-        <p class="hint">Wenn hier kein Key gespeichert ist, wird der Key aus `.env` verwendet.</p>
-      {% endif %}
-    </form>
-
-    <form action="{{ url_for('build_tts_cache') }}" method="post" class="card grid">
-      <h2>Audio Cache</h2>
-      <p class="hint">Erzeugt alle fehlenden Audio-Dateien. Es läuft streng nacheinander: eine Anfrage, auf fertige MP3 warten, dann die nächste.</p>
-      {% if tts_ready %}
-        <button type="submit">Audio-Dateien jetzt erzeugen</button>
-      {% else %}
-        <p class="error">OPENAI_API_KEY fehlt in der .env Datei.</p>
-      {% endif %}
-    </form>
-
-    <form action="{{ url_for('add_vocab') }}" method="post" class="card grid">
-      <h2>Neue Vokabel einfügen</h2>
-      <label>Fremdsprache
-        <input type="text" name="fremdsprache" required>
-      </label>
-      <label>Deutsch
-        <input type="text" name="deutsch" required>
-      </label>
-      <label>Deklinations-Info (optional)
-        <input type="text" name="deklination">
-      </label>
-      <label>Lektion
-        <input type="text" name="lektion" placeholder="z.B. 1" required>
-      </label>
-      <button type="submit">Vokabel speichern</button>
-    </form>
   </main>
 
   <script>

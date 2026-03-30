@@ -17,6 +17,7 @@ Dieses Projekt ist eine Web-Version deines bisherigen Konsolenprogramms.
 - "Doch als richtig werten"-Button nach einer falschen Antwort
 - "Zur Auswahl"-Button auf Lern-/Feedback-/Ergebnis-Seiten
 - OpenAI Text-to-Speech mit Audio-Cache (pro Wort nur einmal generieren)
+- Rollen-Zugriff per Code: Admin-Modus und Lern-Modus
 
 ## Projektstruktur
 
@@ -118,6 +119,20 @@ Dann im Browser öffnen:
 Auf der Startseite einmal `Audio-Dateien jetzt erzeugen` klicken, damit die Audios vorab erstellt werden.
 Danach werden die gespeicherten Dateien genutzt und es fallen keine erneuten TTS-Kosten für bestehende Wörter an.
 Im Lernmodus werden fehlende Audios nicht mehr on-the-fly erzeugt, sondern nur bereits gecachte Dateien abgespielt.
+
+## Rollen und Zugriffscode
+
+Beim ersten Aufruf wird ein Code abgefragt:
+
+- Admin-Code (Standard): `3647`
+- Lern-Code (Standard): `12321`
+
+Optional in `.env` anpassen:
+
+```bash
+echo "ADMIN_ACCESS_CODE=3647" >> .env
+echo "LEARNER_ACCESS_CODE=12321" >> .env
+```
 
 Abbrechen mit `Ctrl+C`.
 

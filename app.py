@@ -17,6 +17,8 @@ except Exception:
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-this-in-production")
+ADMIN_ACCESS_CODE = os.getenv("ADMIN_ACCESS_CODE", "3647")
+LEARNER_ACCESS_CODE = os.getenv("LEARNER_ACCESS_CODE", "12321")
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_VOKABEL_DATEI = BASE_DIR / "data" / "vokabeln.csv"
@@ -34,6 +36,15 @@ TTS_MAX_NEW_PER_RUN = int(os.getenv("TTS_MAX_NEW_PER_RUN", "0"))
 _OPENAI_CLIENT = None
 RUNTIME_SECRETS_FILE = BASE_DIR / "data" / "runtime_secrets.json"
 TTS_BUILD_LOCK_FILE = BASE_DIR / "data" / "tts_build.lock"
+ADMIN_ONLY_ENDPOINTS = {
+    "audio_files",
+    "build_tts_cache",
+    "set_api_key",
+    "add_vocab",
+    "manage_vocab",
+    "delete_vocab",
+    "delete_lesson",
+}
 
 
 def _resolve_vokabel_datei():
@@ -110,6 +121,24 @@ def _cached_audio_rel_path(uid, kind, text):
     rel_path = _audio_rel_path(uid, kind, cleaned)
     abs_path = BASE_DIR / "static" / rel_path
     return rel_path if abs_path.exists() else None
+
+
+def _delete_audio_files_for_vocab(v):
+    deleted = 0
+    uid = _make_uid(v)
+    for kind, text in (("lat", v.get("fremdsprache", "")), ("de", v.get("deutsch", ""))):
+        cleaned = (text or "").strip()
+        if not cleaned:
+            continue
+        rel_path = _audio_rel_path(uid, kind, cleaned)
+        abs_path = BASE_DIR / "static" / rel_path
+        if abs_path.exists():
+            try:
+                abs_path.unlink()
+                deleted += 1
+            except Exception:
+                pass
+    return deleted
 
 
 def _ensure_tts_audio(uid, kind, text):
@@ -282,6 +311,18 @@ def _safe_positive_int(value, default_value):
     return n if n > 0 else default_value
 
 
+def _current_role():
+    return session.get("role")
+
+
+def _is_admin():
+    return _current_role() == "admin"
+
+
+def _home_endpoint():
+    return "index" if _is_admin() else "learn_home"
+
+
 def _build_queue(vokabeln, mode, selected_lektionen, block_size, block_selection, repetitions):
     targets = [v for v in vokabeln if v.get("lektion") in selected_lektionen]
 
@@ -322,8 +363,29 @@ def _build_queue(vokabeln, mode, selected_lektionen, block_size, block_selection
     return [{"uid": _make_uid(v), "display": v} for v in targets]
 
 
+@app.before_request
+def _protect_routes():
+    endpoint = request.endpoint or ""
+    if endpoint.startswith("static"):
+        return None
+    if endpoint in {"access_gate", "submit_access_code"}:
+        return None
+
+    role = _current_role()
+    if role not in {"admin", "learner"}:
+        return redirect(url_for("access_gate"))
+
+    if role != "admin" and endpoint in ADMIN_ONLY_ENDPOINTS:
+        return redirect(url_for("learn_home"))
+
+    return None
+
+
 @app.get("/")
 def index():
+    if not _is_admin():
+        return redirect(url_for("learn_home"))
+
     vokabeln = lade_vokabeln_full()
     status = request.args.get("status")
     message = request.args.get("message")
@@ -338,6 +400,116 @@ def index():
         message=message,
         tts_ready=tts_ready,
         has_runtime_key=has_runtime_key,
+    )
+
+
+@app.get("/learn")
+def learn_home():
+    vokabeln = lade_vokabeln_full()
+    status = request.args.get("status")
+    message = request.args.get("message")
+    return render_template(
+        "learn.html",
+        lektionen=alle_lektionen(vokabeln),
+        total=len(vokabeln),
+        error=None if vokabeln else f"{VOKABEL_DATEI} wurde nicht gefunden oder ist leer.",
+        status=status,
+        message=message,
+    )
+
+
+@app.get("/access")
+def access_gate():
+    if _current_role() in {"admin", "learner"}:
+        return redirect(url_for(_home_endpoint()))
+    return render_template("access_gate.html", error=None)
+
+
+@app.post("/access")
+def submit_access_code():
+    code = (request.form.get("access_code") or "").strip()
+    if code == ADMIN_ACCESS_CODE:
+        session["role"] = "admin"
+        return redirect(url_for("index"))
+    if code == LEARNER_ACCESS_CODE:
+        session["role"] = "learner"
+        return redirect(url_for("learn_home"))
+    return render_template("access_gate.html", error="Falscher Code.")
+
+
+@app.post("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("access_gate"))
+
+
+@app.get("/manage_vocab")
+def manage_vocab():
+    vokabeln = lade_vokabeln_full()
+    grouped = {}
+    for v in vokabeln:
+        lek = v.get("lektion", "")
+        grouped.setdefault(lek, []).append(v)
+    sorted_lessons = sorted(grouped.keys(), key=lambda x: str(x))
+    return render_template(
+        "manage_vocab.html",
+        grouped=grouped,
+        lessons=sorted_lessons,
+        total=len(vokabeln),
+    )
+
+
+@app.post("/delete_vocab")
+def delete_vocab():
+    uid = (request.form.get("uid") or "").strip()
+    if not uid:
+        return redirect(url_for("manage_vocab"))
+
+    master = lade_vokabeln_full()
+    to_delete = [v for v in master if _make_uid(v) == uid]
+    kept = [v for v in master if _make_uid(v) != uid]
+
+    if not to_delete:
+        return redirect(url_for("index", status="error", message="Vokabel nicht gefunden."))
+
+    audio_deleted = 0
+    for v in to_delete:
+        audio_deleted += _delete_audio_files_for_vocab(v)
+
+    speichere_vokabeln_full(kept)
+    return redirect(
+        url_for(
+            "index",
+            status="ok",
+            message=f"Vokabel geloescht. Audios entfernt: {audio_deleted}",
+        )
+    )
+
+
+@app.post("/delete_lesson")
+def delete_lesson():
+    lektion = (request.form.get("lektion") or "").strip()
+    if not lektion:
+        return redirect(url_for("manage_vocab"))
+
+    master = lade_vokabeln_full()
+    to_delete = [v for v in master if (v.get("lektion") or "") == lektion]
+    kept = [v for v in master if (v.get("lektion") or "") != lektion]
+
+    if not to_delete:
+        return redirect(url_for("index", status="error", message="Lektion nicht gefunden."))
+
+    audio_deleted = 0
+    for v in to_delete:
+        audio_deleted += _delete_audio_files_for_vocab(v)
+
+    speichere_vokabeln_full(kept)
+    return redirect(
+        url_for(
+            "index",
+            status="ok",
+            message=f"Lektion {lektion} geloescht ({len(to_delete)} Woerter). Audios entfernt: {audio_deleted}",
+        )
     )
 
 
@@ -470,7 +642,7 @@ def add_vocab():
 def start():
     vokabeln = lade_vokabeln_full()
     if not vokabeln:
-        return redirect(url_for("index"))
+        return redirect(url_for(_home_endpoint()))
 
     mode = request.form.get("mode", "kartei")
     selected_lektionen = request.form.getlist("lektionen")
@@ -500,7 +672,7 @@ def start():
 def quiz():
     state = session.get("state")
     if not state:
-        return redirect(url_for("index"))
+        return redirect(url_for(_home_endpoint()))
 
     queue = state.get("queue", [])
     idx = state.get("index", 0)
@@ -529,7 +701,7 @@ def quiz():
 def answer():
     state = session.get("state")
     if not state:
-        return redirect(url_for("index"))
+        return redirect(url_for(_home_endpoint()))
 
     mode = state.get("mode", "kartei")
     queue = state.get("queue", [])
@@ -593,7 +765,7 @@ def next_question():
 def mark_correct():
     state = session.get("state")
     if not state:
-        return redirect(url_for("index"))
+        return redirect(url_for(_home_endpoint()))
 
     last_feedback = state.get("last_feedback") or {}
     if not last_feedback.get("was_wrong"):
@@ -623,7 +795,7 @@ def mark_correct():
 def summary():
     state = session.get("state")
     if not state:
-        return redirect(url_for("index"))
+        return redirect(url_for(_home_endpoint()))
 
     wrong = state.get("wrong", [])
     total = len(state.get("queue", []))
@@ -642,13 +814,13 @@ def summary():
 @app.post("/reset")
 def reset_state():
     session.pop("state", None)
-    return redirect(url_for("index"))
+    return redirect(url_for(_home_endpoint()))
 
 
 @app.post("/back")
 def back_to_selection():
     session.pop("state", None)
-    return redirect(url_for("index"))
+    return redirect(url_for(_home_endpoint()))
 
 
 if __name__ == "__main__":

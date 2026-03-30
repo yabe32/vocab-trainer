@@ -72,6 +72,11 @@ button.secondary {
   background: #64748b;
 }
 
+.danger,
+button.danger {
+  background: #b91c1c;
+}
+
 .topbar-form {
   margin-bottom: 0.75rem;
 }
