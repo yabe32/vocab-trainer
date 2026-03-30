@@ -32,7 +32,7 @@
 
     <form action="{{ url_for('build_tts_cache') }}" method="post" class="card grid">
       <h2>Audio Cache</h2>
-      <p class="hint">Erzeugt pro Wort genau eine Audio-Datei für Fremdsprache und Deutsch. Danach werden nur noch die gespeicherten Dateien abgespielt.</p>
+      <p class="hint">Erzeugt pro Wort genau eine Audio-Datei für Fremdsprache und Deutsch. Die Erstellung läuft nacheinander (gedrosselt) und nutzt danach nur den Cache.</p>
       {% if tts_ready %}
         <button type="submit">Audio-Dateien jetzt erzeugen</button>
       {% else %}

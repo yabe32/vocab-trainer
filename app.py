@@ -5,6 +5,7 @@ import os
 import random
 import shutil
 import threading
+import time
 from pathlib import Path
 
 from flask import Flask, redirect, render_template, request, session, url_for
@@ -28,8 +29,11 @@ TTS_LOCK = threading.Lock()
 FIELDNAMES = ["fremdsprache", "deutsch", "deklination", "lektion", "richtig", "falsch"]
 TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
 TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "alloy")
+TTS_DELAY_SECONDS = float(os.getenv("TTS_DELAY_SECONDS", "0.8"))
+TTS_MAX_NEW_PER_RUN = int(os.getenv("TTS_MAX_NEW_PER_RUN", "50"))
 _OPENAI_CLIENT = None
 RUNTIME_SECRETS_FILE = BASE_DIR / "data" / "runtime_secrets.json"
+TTS_BUILD_LOCK_FILE = BASE_DIR / "data" / "tts_build.lock"
 
 
 def _resolve_vokabel_datei():
@@ -99,6 +103,15 @@ def _audio_rel_path(uid, kind, text):
     return f"audio_cache/{kind}_{digest}.mp3"
 
 
+def _cached_audio_rel_path(uid, kind, text):
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return None
+    rel_path = _audio_rel_path(uid, kind, cleaned)
+    abs_path = BASE_DIR / "static" / rel_path
+    return rel_path if abs_path.exists() else None
+
+
 def _ensure_tts_audio(uid, kind, text):
     cleaned = (text or "").strip()
     if not cleaned:
@@ -151,10 +164,30 @@ def _build_tts_cache(vokabeln):
             made = _ensure_tts_audio(uid, kind, cleaned)
             if made:
                 created += 1
+                time.sleep(max(0.0, TTS_DELAY_SECONDS))
+                if TTS_MAX_NEW_PER_RUN > 0 and created >= TTS_MAX_NEW_PER_RUN:
+                    return created, existing, failed
             else:
                 failed += 1
 
     return created, existing, failed
+
+
+def _acquire_tts_build_lock():
+    TTS_BUILD_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(str(TTS_BUILD_LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.close(fd)
+        return True
+    except FileExistsError:
+        return False
+
+
+def _release_tts_build_lock():
+    try:
+        TTS_BUILD_LOCK_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 def _to_int(value):
@@ -308,8 +341,25 @@ def build_tts_cache():
             )
         )
 
-    created, existing, failed = _build_tts_cache(vokabeln)
-    msg = f"Audio-Cache fertig: neu={created}, bereits da={existing}, fehlgeschlagen={failed}"
+    if not _acquire_tts_build_lock():
+        return redirect(
+            url_for(
+                "index",
+                status="error",
+                message="Audio-Cache-Build laeuft bereits. Bitte kurz warten und erneut versuchen.",
+            )
+        )
+
+    try:
+        created, existing, failed = _build_tts_cache(vokabeln)
+    finally:
+        _release_tts_build_lock()
+
+    msg = (
+        "Audio-Cache fertig: "
+        f"neu={created}, bereits da={existing}, fehlgeschlagen={failed}, "
+        f"delay={TTS_DELAY_SECONDS}s, max-neu-pro-lauf={TTS_MAX_NEW_PER_RUN}"
+    )
     status = "ok" if failed == 0 else "error"
     return redirect(url_for("index", status=status, message=msg))
 
@@ -430,7 +480,7 @@ def quiz():
     item = queue[idx]
     v = item["display"]
     mode = state.get("mode", "kartei")
-    audio_rel = _ensure_tts_audio(item["uid"], "lat", v.get("fremdsprache", ""))
+    audio_rel = _cached_audio_rel_path(item["uid"], "lat", v.get("fremdsprache", ""))
     question_audio_url = url_for("static", filename=audio_rel) if audio_rel else None
 
     return render_template(
@@ -489,7 +539,7 @@ def answer():
     session["state"] = state
 
     translation_text = queue[idx]["display"].get("deutsch", "")
-    answer_audio_rel = _ensure_tts_audio(uid, "de", translation_text)
+    answer_audio_rel = _cached_audio_rel_path(uid, "de", translation_text)
     answer_audio_url = url_for("static", filename=answer_audio_rel) if answer_audio_rel else None
 
     return render_template(

@@ -96,6 +96,13 @@ echo "OPENAI_API_KEY=dein_key" >> .env
 Alternativ kannst du den Key auf der Startseite im Browser speichern.
 Dann liegt er serverseitig in `data/runtime_secrets.json` (nicht im Git-Repo).
 
+Optionale Drosselung fuer den Audio-Build (`.env`):
+
+```bash
+echo "TTS_DELAY_SECONDS=0.8" >> .env
+echo "TTS_MAX_NEW_PER_RUN=50" >> .env
+```
+
 ## 3) Testweise starten
 
 ```bash
@@ -108,6 +115,7 @@ Dann im Browser öffnen:
 
 Auf der Startseite einmal `Audio-Dateien jetzt erzeugen` klicken, damit die Audios vorab erstellt werden.
 Danach werden die gespeicherten Dateien genutzt und es fallen keine erneuten TTS-Kosten für bestehende Wörter an.
+Im Lernmodus werden fehlende Audios nicht mehr on-the-fly erzeugt, sondern nur bereits gecachte Dateien abgespielt.
 
 Abbrechen mit `Ctrl+C`.
 
