@@ -363,6 +363,73 @@ def _build_queue(vokabeln, mode, selected_lektionen, block_size, block_selection
     return [{"uid": _make_uid(v), "display": v} for v in targets]
 
 
+def _select_words_by_blocks(vokabeln, selected_lektionen, block_size, block_selection):
+    targets = [v for v in vokabeln if v.get("lektion") in selected_lektionen]
+    if not targets:
+        return []
+
+    blocks = [targets[i : i + block_size] for i in range(0, len(targets), block_size)]
+
+    if (block_selection or "").strip().lower() == "alle":
+        selected_block_indices = list(range(len(blocks)))
+    else:
+        selected_block_indices = []
+        for item in (block_selection or "").split(","):
+            item = item.strip()
+            if item.isdigit():
+                idx = int(item) - 1
+                if 0 <= idx < len(blocks):
+                    selected_block_indices.append(idx)
+        if not selected_block_indices:
+            selected_block_indices = list(range(len(blocks)))
+
+    words = []
+    for block_idx in selected_block_indices:
+        words.extend(blocks[block_idx])
+    return words
+
+
+def _build_auto_audio_playlist(vokabeln, selected_lektionen, block_size, block_selection, repeats_per_word, total_rounds):
+    words = _select_words_by_blocks(vokabeln, selected_lektionen, block_size, block_selection)
+    playlist = []
+    playable_words = 0
+    skipped_words = 0
+
+    for _round in range(total_rounds):
+        for v in words:
+            uid = _make_uid(v)
+            lat_rel = _cached_audio_rel_path(uid, "lat", v.get("fremdsprache", ""))
+            de_rel = _cached_audio_rel_path(uid, "de", v.get("deutsch", ""))
+
+            if not lat_rel or not de_rel:
+                skipped_words += 1
+                continue
+
+            playable_words += 1
+            lat_url = url_for("static", filename=lat_rel)
+            de_url = url_for("static", filename=de_rel)
+
+            for _ in range(repeats_per_word):
+                playlist.append(
+                    {
+                        "url": lat_url,
+                        "label": v.get("fremdsprache", ""),
+                        "type": "Fremdwort",
+                        "lesson": v.get("lektion", ""),
+                    }
+                )
+                playlist.append(
+                    {
+                        "url": de_url,
+                        "label": v.get("deutsch", ""),
+                        "type": "Deutsch",
+                        "lesson": v.get("lektion", ""),
+                    }
+                )
+
+    return playlist, playable_words, skipped_words, len(words)
+
+
 @app.before_request
 def _protect_routes():
     endpoint = request.endpoint or ""
@@ -651,7 +718,36 @@ def start():
 
     block_size = _safe_positive_int(request.form.get("block_size", "5"), 5)
     repetitions = _safe_positive_int(request.form.get("repetitions", "1"), 1)
+    repeats_per_word = _safe_positive_int(request.form.get("repeats_per_word", "5"), 5)
+    total_rounds = _safe_positive_int(request.form.get("total_rounds", "3"), 3)
     block_selection = request.form.get("block_selection", "alle").strip().lower() or "alle"
+
+    if mode == "auto_audio":
+        playlist, playable_words, skipped_words, selected_words = _build_auto_audio_playlist(
+            vokabeln=vokabeln,
+            selected_lektionen=selected_lektionen,
+            block_size=block_size,
+            block_selection=block_selection,
+            repeats_per_word=repeats_per_word,
+            total_rounds=total_rounds,
+        )
+        if not playlist:
+            return redirect(
+                url_for(
+                    _home_endpoint(),
+                    status="error",
+                    message="Keine abspielbaren Audios gefunden. Bitte erst Audio-Cache erzeugen.",
+                )
+            )
+        return render_template(
+            "auto_audio.html",
+            playlist=playlist,
+            selected_words=selected_words,
+            playable_words=playable_words,
+            skipped_words=skipped_words,
+            repeats_per_word=repeats_per_word,
+            total_rounds=total_rounds,
+        )
 
     queue = _build_queue(vokabeln, mode, selected_lektionen, block_size, block_selection, repetitions)
     random.shuffle(queue)

@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Auto-Audio-Modus - Vokabeltrainer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <main class="container">
+    <form action="{{ url_for('back_to_selection') }}" method="post" class="topbar-form" id="back-form">
+      <button type="submit" class="button secondary">Zur Auswahl</button>
+    </form>
+
+    <div class="card grid">
+      <h1>Auto-Audio-Modus</h1>
+      <p><strong>Gewählte Wörter:</strong> {{ selected_words }}</p>
+      <p><strong>Abspielbare Wörter:</strong> {{ playable_words }}</p>
+      <p><strong>Ohne Audio übersprungen:</strong> {{ skipped_words }}</p>
+      <p><strong>Wiederholungen pro Wort:</strong> {{ repeats_per_word }}</p>
+      <p><strong>Wiederholungen insgesamt:</strong> {{ total_rounds }}</p>
+
+      <div class="actions">
+        <button type="button" id="start-btn">Start</button>
+        <button type="button" id="pause-btn" class="secondary">Pause</button>
+        <button type="button" id="resume-btn" class="secondary">Weiter</button>
+        <button type="button" id="restart-btn" class="secondary">Neu starten</button>
+      </div>
+
+      <p id="progress" class="muted">0 / 0</p>
+      <p id="current" class="muted">Bereit...</p>
+      <audio id="player" preload="auto"></audio>
+    </div>
+  </main>
+
+  <script>
+    const playlist = {{ playlist | tojson }};
+    const player = document.getElementById("player");
+    const progress = document.getElementById("progress");
+    const current = document.getElementById("current");
+    const startBtn = document.getElementById("start-btn");
+    const pauseBtn = document.getElementById("pause-btn");
+    const resumeBtn = document.getElementById("resume-btn");
+    const restartBtn = document.getElementById("restart-btn");
+
+    let idx = 0;
+    let started = false;
+
+    function updateUI() {
+      progress.textContent = `${Math.min(idx + 1, playlist.length)} / ${playlist.length}`;
+      if (idx >= playlist.length) {
+        current.textContent = "Fertig.";
+        return;
+      }
+      const item = playlist[idx];
+      current.textContent = `${item.type}: ${item.label} (Lektion ${item.lesson})`;
+    }
+
+    function playCurrent() {
+      if (idx >= playlist.length) {
+        updateUI();
+        return;
+      }
+      const item = playlist[idx];
+      player.src = item.url;
+      updateUI();
+      player.play().catch(() => {});
+    }
+
+    function startPlayback() {
+      if (!playlist.length) {
+        current.textContent = "Keine Audios in der Playlist.";
+        return;
+      }
+      if (!started) {
+        started = true;
+        idx = 0;
+      }
+      playCurrent();
+    }
+
+    player.addEventListener("ended", () => {
+      idx += 1;
+      if (idx < playlist.length) {
+        playCurrent();
+      } else {
+        updateUI();
+      }
+    });
+
+    startBtn.addEventListener("click", startPlayback);
+    pauseBtn.addEventListener("click", () => player.pause());
+    resumeBtn.addEventListener("click", () => player.play().catch(() => {}));
+    restartBtn.addEventListener("click", () => {
+      idx = 0;
+      started = true;
+      playCurrent();
+    });
+
+    document.addEventListener("keydown", function (event) {
+      if (event.key !== "Escape") return;
+      const backForm = document.getElementById("back-form");
+      if (!backForm) return;
+      event.preventDefault();
+      backForm.submit();
+    });
+
+    // Autostart ohne Klick
+    startPlayback();
+  </script>
+</body>
+</html>

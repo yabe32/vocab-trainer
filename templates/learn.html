@@ -31,6 +31,7 @@
             <option value="abschreiben">Abschreiben</option>
             <option value="deklination">Deklination</option>
             <option value="block">Block-Modus</option>
+            <option value="auto_audio">Auto-Audio-Modus</option>
             <option value="fehler">Meiste Fehler zuerst</option>
           </select>
         </label>
@@ -57,6 +58,22 @@
           </label>
         </div>
 
+        <div id="auto-audio-settings" class="block-settings hidden">
+          <label>Blockgröße (z.B. 5 Wörter)
+            <input type="number" name="block_size" min="1" value="5">
+          </label>
+          <label>Blöcke (z.B. 1 oder 1,2,3 oder alle)
+            <input type="text" name="block_selection" value="alle" placeholder="z.B. 1,2,3 oder alle">
+          </label>
+          <label>Wiederholungen pro Wort
+            <input type="number" name="repeats_per_word" min="1" value="5">
+          </label>
+          <label>Wiederholungen insgesamt
+            <input type="number" name="total_rounds" min="1" value="3">
+          </label>
+          <p class="hint">Automatisch: Fremdwort-Audio und danach Deutsch-Audio, ohne Klicks.</p>
+        </div>
+
         <button type="submit">Lernen starten</button>
       </form>
     {% endif %}
@@ -65,11 +82,14 @@
   <script>
     const modeSelect = document.getElementById('mode-select');
     const blockSettings = document.getElementById('block-settings');
+    const autoAudioSettings = document.getElementById('auto-audio-settings');
 
     function toggleBlockSettings() {
-      if (!modeSelect || !blockSettings) return;
-      const active = modeSelect.value === 'block';
-      blockSettings.classList.toggle('hidden', !active);
+      if (!modeSelect) return;
+      const blockActive = modeSelect.value === 'block';
+      const autoActive = modeSelect.value === 'auto_audio';
+      if (blockSettings) blockSettings.classList.toggle('hidden', !blockActive);
+      if (autoAudioSettings) autoAudioSettings.classList.toggle('hidden', !autoActive);
     }
 
     if (modeSelect) {

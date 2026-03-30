@@ -13,6 +13,7 @@ Dieses Projekt ist eine Web-Version deines bisherigen Konsolenprogramms.
 - Deklinations-Modus
 - Block-Modus (Blockgröße, Blockauswahl, Wiederholungen)
 - Fehler-Modus (höchste Fehler zuerst)
+- Auto-Audio-Modus (vollautomatisch Fremdwort -> Deutsch)
 - Browser-Formular zum Hinzufügen neuer Vokabeln
 - "Doch als richtig werten"-Button nach einer falschen Antwort
 - "Zur Auswahl"-Button auf Lern-/Feedback-/Ergebnis-Seiten
