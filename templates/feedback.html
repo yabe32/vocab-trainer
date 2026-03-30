@@ -8,7 +8,7 @@
 </head>
 <body>
   <main class="container">
-    <form action="{{ url_for('back_to_selection') }}" method="post" class="topbar-form">
+    <form action="{{ url_for('back_to_selection') }}" method="post" class="topbar-form" id="back-form">
       <button type="submit" class="button secondary">Zur Auswahl</button>
     </form>
 
@@ -27,9 +27,31 @@
             <button type="submit" class="secondary">Doch als richtig werten</button>
           </form>
         {% endif %}
-        <a class="button" href="{{ url_for('next_question') }}">Nächste Frage</a>
+        <form action="{{ url_for('next_question') }}" method="get" id="next-form">
+          <button type="submit" autofocus>Nächste Frage</button>
+        </form>
       </div>
     </div>
   </main>
+
+  <script>
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") {
+        const backForm = document.getElementById("back-form");
+        if (!backForm) return;
+        event.preventDefault();
+        backForm.submit();
+        return;
+      }
+      if (event.key !== "Enter") return;
+      const target = event.target;
+      const tag = (target && target.tagName ? target.tagName.toLowerCase() : "");
+      if (tag === "input" || tag === "textarea") return;
+      const nextForm = document.getElementById("next-form");
+      if (!nextForm) return;
+      event.preventDefault();
+      nextForm.submit();
+    });
+  </script>
 </body>
 </html>

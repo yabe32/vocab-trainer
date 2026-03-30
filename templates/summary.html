@@ -8,7 +8,7 @@
 </head>
 <body>
   <main class="container">
-    <form action="{{ url_for('back_to_selection') }}" method="post" class="topbar-form">
+    <form action="{{ url_for('back_to_selection') }}" method="post" class="topbar-form" id="back-form">
       <button type="submit" class="button secondary">Zur Auswahl</button>
     </form>
 
@@ -33,5 +33,14 @@
       </form>
     </div>
   </main>
+  <script>
+    document.addEventListener("keydown", function (event) {
+      if (event.key !== "Escape") return;
+      const backForm = document.getElementById("back-form");
+      if (!backForm) return;
+      event.preventDefault();
+      backForm.submit();
+    });
+  </script>
 </body>
 </html>
