@@ -3,25 +3,40 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Vokabeln verwalten - Vokabeltrainer</title>
+  <title>Vokabeln - Vokabeltrainer</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
   <main class="container">
-    <div class="card">
-      <h1>Vokabeln verwalten</h1>
+    <div class="card grid">
+      <h1>Vokabelliste</h1>
       <p class="muted">Gesamt: {{ total }}</p>
-      <a class="button secondary" href="{{ url_for('index') }}">Zurück zur Startseite</a>
+      <form action="{{ url_for('manage_vocab') }}" method="get" class="grid">
+        <label>Quelle
+          <select name="source_id" onchange="this.form.submit()">
+            {% for s in sources %}
+              <option value="{{ s.id }}" {% if source_id == s.id %}selected{% endif %}>{{ s.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </form>
+      <a class="button secondary" href="{{ url_for('index') if can_edit else url_for('learn_home') }}">Zurueck</a>
+      {% if not can_edit %}
+        <p class="hint">Read-only Ansicht. Loeschen ist nur im Admin-Modus in der Standard-Quelle moeglich.</p>
+      {% endif %}
     </div>
 
     {% for lektion in lessons %}
       <div class="card">
         <div class="actions">
           <h2>Lektion {{ lektion }}</h2>
-          <form action="{{ url_for('delete_lesson') }}" method="post" onsubmit="return confirm('Lektion {{ lektion }} wirklich löschen?');">
-            <input type="hidden" name="lektion" value="{{ lektion }}">
-            <button type="submit" class="danger">Ganze Lektion löschen</button>
-          </form>
+          {% if can_edit %}
+            <form action="{{ url_for('delete_lesson') }}" method="post" onsubmit="return confirm('Lektion {{ lektion }} wirklich loeschen?');">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="lektion" value="{{ lektion }}">
+              <button type="submit" class="danger">Ganze Lektion loeschen</button>
+            </form>
+          {% endif %}
         </div>
         <table class="audio-table">
           <thead>
@@ -29,7 +44,7 @@
               <th>Fremdsprache</th>
               <th>Deutsch</th>
               <th>Deklination</th>
-              <th>Aktion</th>
+              {% if can_edit %}<th>Aktion</th>{% endif %}
             </tr>
           </thead>
           <tbody>
@@ -38,12 +53,15 @@
                 <td>{{ v.fremdsprache }}</td>
                 <td>{{ v.deutsch }}</td>
                 <td>{{ v.deklination }}</td>
-                <td>
-                  <form action="{{ url_for('delete_vocab') }}" method="post" onsubmit="return confirm('Dieses Wort wirklich löschen?');">
-                    <input type="hidden" name="uid" value="{{ v.fremdsprache }}|{{ v.deutsch }}|{{ v.lektion }}">
-                    <button type="submit" class="danger">Wort löschen</button>
-                  </form>
-                </td>
+                {% if can_edit %}
+                  <td>
+                    <form action="{{ url_for('delete_vocab') }}" method="post" onsubmit="return confirm('Dieses Wort wirklich loeschen?');">
+                      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                      <input type="hidden" name="uid" value="{{ v.fremdsprache }}|{{ v.deutsch }}|{{ v.lektion }}">
+                      <button type="submit" class="danger">Wort loeschen</button>
+                    </form>
+                  </td>
+                {% endif %}
               </tr>
             {% endfor %}
           </tbody>

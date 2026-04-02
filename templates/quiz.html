@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="de">
 <head>
   <meta charset="utf-8">
@@ -9,36 +9,31 @@
 <body>
   <main class="container">
     <form action="{{ url_for('back_to_selection') }}" method="post" class="topbar-form" id="back-form">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="button secondary">Zur Auswahl</button>
     </form>
 
     <div class="card">
       <p class="muted">{{ current }} / {{ total }} | Modus: {{ mode }}</p>
-      <h2>{{ vokabel.fremdsprache }}</h2>
-      {% if question_audio_url %}
+      <h2>
+        {{ vokabel.fremdsprache }}
+        {% if show_declension_inline and vokabel.deklination %}
+          <span class="muted">({{ vokabel.deklination }})</span>
+        {% endif %}
+      </h2>
+
+      {% if audio_enabled and question_audio_url %}
         <audio id="question-audio" src="{{ question_audio_url }}" preload="auto" autoplay></audio>
         <button id="play-question-audio" type="button" class="secondary">Nochmal vorspielen</button>
       {% endif %}
-      {% if vokabel.deklination %}
-        <p><strong>Deklinations-Info:</strong> {{ vokabel.deklination }}</p>
-      {% endif %}
-      {% if mode == "deklination" %}
-        <p>Gib die Deklinationsinfo ein:</p>
-      {% elif mode == "abschreiben" %}
-        <p><strong>Deutsch:</strong> {{ vokabel.deutsch }}</p>
-        <p>Bitte abschreiben und dann weiter.</p>
-      {% else %}
-        <p>Gib die deutsche Bedeutung ein:</p>
-      {% endif %}
+
+      <p>{{ answer_hint }}</p>
 
       <form action="{{ url_for('answer') }}" method="post" class="grid">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="uid" value="{{ uid }}">
-        {% if mode == "abschreiben" %}
-          <button type="submit" autofocus>Weiter</button>
-        {% else %}
-          <input type="text" name="answer" autocomplete="off" autofocus required>
-          <button type="submit">Antwort prüfen</button>
-        {% endif %}
+        <input type="text" name="answer" autocomplete="off" autofocus required>
+        <button type="submit">Antwort pruefen</button>
       </form>
     </div>
   </main>

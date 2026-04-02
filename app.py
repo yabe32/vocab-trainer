@@ -1,14 +1,19 @@
 ﻿import csv
 import hashlib
+import io
 import json
 import os
 import random
+import re
+import secrets
 import shutil
 import threading
 import time
+import zipfile
+from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, redirect, render_template, request, session, url_for
+from flask import Flask, redirect, render_template, request, send_file, session, url_for
 
 try:
     from openai import OpenAI
@@ -24,11 +29,15 @@ BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_VOKABEL_DATEI = BASE_DIR / "data" / "vokabeln.csv"
 SEED_VOKABEL_DATEI = BASE_DIR / "data" / "vokabeln.seed.csv"
 LEGACY_VOKABEL_DATEI = BASE_DIR / "vokabeln.csv"
+IMPORTS_DIR = BASE_DIR / "data" / "imports"
+IMPORTS_DIR.mkdir(parents=True, exist_ok=True)
 AUDIO_CACHE_DIR = BASE_DIR / "static" / "audio_cache"
 AUDIO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 DATA_LOCK = threading.Lock()
 TTS_LOCK = threading.Lock()
 FIELDNAMES = ["fremdsprache", "deutsch", "deklination", "lektion", "richtig", "falsch"]
+DEFAULT_SOURCE_ID = "__default__"
+ALLOWED_MODES = {"kartei", "block", "auto_audio"}
 TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
 TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "alloy")
 TTS_DELAY_SECONDS = float(os.getenv("TTS_DELAY_SECONDS", "0.8"))
@@ -41,9 +50,11 @@ ADMIN_ONLY_ENDPOINTS = {
     "build_tts_cache",
     "set_api_key",
     "add_vocab",
-    "manage_vocab",
     "delete_vocab",
     "delete_lesson",
+    "export_csv",
+    "export_audio_zip",
+    "import_csv",
 }
 
 
@@ -68,6 +79,112 @@ def _resolve_vokabel_datei():
 
 
 VOKABEL_DATEI = _resolve_vokabel_datei()
+
+def _sanitize_import_name(name):
+    stem = Path(name or "import").stem
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-")
+    return cleaned or "import"
+
+
+def _is_path_within(parent, child):
+    try:
+        child.resolve().relative_to(parent.resolve())
+        return True
+    except Exception:
+        return False
+
+
+def _resolve_csv_path(csv_path=None):
+    if csv_path is None:
+        return VOKABEL_DATEI
+    p = Path(csv_path)
+    if not p.is_absolute():
+        p = (BASE_DIR / p).resolve()
+    else:
+        p = p.resolve()
+    return p
+
+
+def _source_id_for_path(csv_path):
+    p = _resolve_csv_path(csv_path)
+    if p == VOKABEL_DATEI:
+        return DEFAULT_SOURCE_ID
+    if _is_path_within(IMPORTS_DIR, p):
+        return p.name
+    return DEFAULT_SOURCE_ID
+
+
+def _resolve_source_from_id(source_id):
+    src = (source_id or DEFAULT_SOURCE_ID).strip()
+    if src == DEFAULT_SOURCE_ID:
+        return VOKABEL_DATEI
+    candidate = (IMPORTS_DIR / src).resolve()
+    if not _is_path_within(IMPORTS_DIR, candidate):
+        return VOKABEL_DATEI
+    if candidate.suffix.lower() != ".csv":
+        return VOKABEL_DATEI
+    if not candidate.exists():
+        return VOKABEL_DATEI
+    return candidate
+
+
+def _available_sources():
+    out = [
+        {
+            "id": DEFAULT_SOURCE_ID,
+            "label": f"Standard ({VOKABEL_DATEI.name})",
+            "path": str(VOKABEL_DATEI),
+        }
+    ]
+    for p in sorted(IMPORTS_DIR.glob("*.csv"), key=lambda x: x.name.lower()):
+        out.append({"id": p.name, "label": f"Import: {p.name}", "path": str(p)})
+    return out
+
+
+def _load_learning_prefs():
+    defaults = {
+        "mode": "kartei",
+        "block_size": 5,
+        "repetitions": 1,
+        "block_selection": "alle",
+        "repeats_per_word": 5,
+        "total_rounds": 3,
+        "with_declension_answer": False,
+        "show_declension_inline": False,
+        "audio_enabled": True,
+        "selected_lektionen": [],
+        "selected_uids": [],
+        "source_id": DEFAULT_SOURCE_ID,
+    }
+    prefs = dict(defaults)
+    raw = session.get("learning_prefs") or {}
+    if isinstance(raw, dict):
+        prefs.update(raw)
+    prefs["mode"] = prefs.get("mode") if prefs.get("mode") in ALLOWED_MODES else "kartei"
+    prefs["block_size"] = _safe_positive_int(prefs.get("block_size"), 5)
+    prefs["repetitions"] = _safe_positive_int(prefs.get("repetitions"), 1)
+    prefs["repeats_per_word"] = _safe_positive_int(prefs.get("repeats_per_word"), 5)
+    prefs["total_rounds"] = _safe_positive_int(prefs.get("total_rounds"), 3)
+    prefs["block_selection"] = (str(prefs.get("block_selection") or "alle").strip().lower() or "alle")
+    prefs["with_declension_answer"] = bool(prefs.get("with_declension_answer"))
+    prefs["show_declension_inline"] = bool(prefs.get("show_declension_inline"))
+    prefs["audio_enabled"] = bool(prefs.get("audio_enabled", True))
+    prefs["selected_lektionen"] = [str(x) for x in (prefs.get("selected_lektionen") or []) if str(x).strip()]
+    prefs["selected_uids"] = [str(x) for x in (prefs.get("selected_uids") or []) if str(x).strip()]
+    prefs["source_id"] = str(prefs.get("source_id") or DEFAULT_SOURCE_ID)
+    return prefs
+
+
+def _normalize_text(value):
+    return " ".join((value or "").strip().lower().split())
+
+
+def _expected_answer(v, with_declension_answer=False):
+    deutsch = (v.get("deutsch") or "").strip()
+    deklination = (v.get("deklination") or "").strip()
+    if with_declension_answer and deklination:
+        return f"{deutsch} {deklination}".strip()
+    return deutsch
 
 
 def _load_runtime_secrets():
@@ -241,12 +358,13 @@ def _to_int(value):
         return 0
 
 
-def lade_vokabeln_full():
+def lade_vokabeln_full(csv_path=None):
+    csv_file = _resolve_csv_path(csv_path)
     vokabeln = []
-    if not VOKABEL_DATEI.exists():
+    if not csv_file.exists():
         return vokabeln
 
-    with VOKABEL_DATEI.open(newline="", encoding="utf-8") as f:
+    with csv_file.open(newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             row = {k: (v or "") for k, v in row.items()}
@@ -256,22 +374,39 @@ def lade_vokabeln_full():
     return vokabeln
 
 
-def speichere_vokabeln_full(vokabeln):
+def _write_vokabeln(csv_path, vokabeln):
+    csv_file = _resolve_csv_path(csv_path)
+    csv_file.parent.mkdir(parents=True, exist_ok=True)
+    with csv_file.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
+        writer.writeheader()
+        for v in vokabeln:
+            writer.writerow(
+                {
+                    "fremdsprache": v.get("fremdsprache", ""),
+                    "deutsch": v.get("deutsch", ""),
+                    "deklination": v.get("deklination", ""),
+                    "lektion": v.get("lektion", ""),
+                    "richtig": _to_int(v.get("richtig", 0)),
+                    "falsch": _to_int(v.get("falsch", 0)),
+                }
+            )
+
+
+def speichere_vokabeln_full(vokabeln, csv_path=None):
     with DATA_LOCK:
-        with VOKABEL_DATEI.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
-            writer.writeheader()
-            for v in vokabeln:
-                writer.writerow(
-                    {
-                        "fremdsprache": v.get("fremdsprache", ""),
-                        "deutsch": v.get("deutsch", ""),
-                        "deklination": v.get("deklination", ""),
-                        "lektion": v.get("lektion", ""),
-                        "richtig": _to_int(v.get("richtig", 0)),
-                        "falsch": _to_int(v.get("falsch", 0)),
-                    }
-                )
+        _write_vokabeln(csv_path, vokabeln)
+
+
+
+
+@contextlib.contextmanager
+def _locked_vocab_update(csv_path=None):
+    with DATA_LOCK:
+        path = _resolve_csv_path(csv_path)
+        master = lade_vokabeln_full(path)
+        yield master
+        _write_vokabeln(path, master)
 
 
 def alle_lektionen(vokabeln):
@@ -282,18 +417,15 @@ def _make_uid(v):
     return f"{v.get('fremdsprache','')}|{v.get('deutsch','')}|{v.get('lektion','')}"
 
 
-def _apply_scoring(uid, mode, user_answer, master):
-    normalized = user_answer.strip().lower()
+def _apply_scoring(uid, user_answer, master, with_declension_answer=False):
+    normalized = _normalize_text(user_answer)
     for v in master:
         if _make_uid(v) != uid:
             continue
 
-        if mode == "deklination":
-            expected = (v.get("deklination") or "").strip().lower()
-        else:
-            expected = (v.get("deutsch") or "").strip().lower()
-
-        correct = normalized == expected
+        expected = _expected_answer(v, with_declension_answer=with_declension_answer)
+        expected_normalized = _normalize_text(expected)
+        correct = normalized == expected_normalized
         if correct:
             v["richtig"] = _to_int(v.get("richtig", 0)) + 1
         else:
@@ -323,15 +455,24 @@ def _home_endpoint():
     return "index" if _is_admin() else "learn_home"
 
 
-def _build_queue(vokabeln, mode, selected_lektionen, block_size, block_selection, repetitions):
+def _csrf_token():
+    token = session.get("_csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["_csrf_token"] = token
+    return token
+
+
+@app.context_processor
+def _inject_csrf():
+    return {"csrf_token": _csrf_token}
+
+
+def _build_queue(vokabeln, mode, selected_lektionen, selected_uids, block_size, block_selection, repetitions):
     targets = [v for v in vokabeln if v.get("lektion") in selected_lektionen]
-
-    if mode == "fehler":
-        targets = [v for v in targets if _to_int(v.get("falsch", 0)) > 0]
-        targets = sorted(targets, key=lambda v: _to_int(v.get("falsch", 0)), reverse=True)
-
-    if mode == "abschreiben":
-        return [{"uid": _make_uid(v), "display": v} for v in targets]
+    if selected_uids:
+        selected_uids_set = set(selected_uids)
+        targets = [v for v in targets if _make_uid(v) in selected_uids_set]
 
     if mode == "block":
         if not targets:
@@ -363,8 +504,11 @@ def _build_queue(vokabeln, mode, selected_lektionen, block_size, block_selection
     return [{"uid": _make_uid(v), "display": v} for v in targets]
 
 
-def _select_words_by_blocks(vokabeln, selected_lektionen, block_size, block_selection):
+def _select_words_by_blocks(vokabeln, selected_lektionen, selected_uids, block_size, block_selection):
     targets = [v for v in vokabeln if v.get("lektion") in selected_lektionen]
+    if selected_uids:
+        selected_uids_set = set(selected_uids)
+        targets = [v for v in targets if _make_uid(v) in selected_uids_set]
     if not targets:
         return []
 
@@ -389,8 +533,8 @@ def _select_words_by_blocks(vokabeln, selected_lektionen, block_size, block_sele
     return words
 
 
-def _build_auto_audio_playlist(vokabeln, selected_lektionen, block_size, block_selection, repeats_per_word, total_rounds):
-    words = _select_words_by_blocks(vokabeln, selected_lektionen, block_size, block_selection)
+def _build_auto_audio_playlist(vokabeln, selected_lektionen, selected_uids, block_size, block_selection, repeats_per_word, total_rounds):
+    words = _select_words_by_blocks(vokabeln, selected_lektionen, selected_uids, block_size, block_selection)
     playlist = []
     playable_words = 0
     skipped_words = 0
@@ -435,6 +579,13 @@ def _protect_routes():
     endpoint = request.endpoint or ""
     if endpoint.startswith("static"):
         return None
+
+    if request.method == "POST":
+        sent_token = (request.form.get("_csrf_token") or "").strip()
+        expected_token = session.get("_csrf_token", "")
+        if not sent_token or not expected_token or not secrets.compare_digest(sent_token, expected_token):
+            return "Bad Request: Ungueltiges CSRF-Token. Bitte Seite neu laden.", 400
+
     if endpoint in {"access_gate", "submit_access_code"}:
         return None
 
@@ -453,35 +604,79 @@ def index():
     if not _is_admin():
         return redirect(url_for("learn_home"))
 
-    vokabeln = lade_vokabeln_full()
+    prefs = _load_learning_prefs()
+    source_path = _resolve_source_from_id(prefs.get("source_id"))
+    selected_source_id = _source_id_for_path(source_path)
+    vokabeln = lade_vokabeln_full(source_path)
+    lektionen = alle_lektionen(vokabeln)
+    valid_uids = {_make_uid(v) for v in vokabeln}
+    prefs["selected_lektionen"] = [l for l in prefs.get("selected_lektionen", []) if l in lektionen]
+    prefs["selected_uids"] = [u for u in prefs.get("selected_uids", []) if u in valid_uids]
+    prefs["source_id"] = selected_source_id
     status = request.args.get("status")
     message = request.args.get("message")
     has_runtime_key = bool(_load_runtime_secrets().get("OPENAI_API_KEY", "").strip())
     tts_ready = bool(_get_effective_openai_api_key()) and (_get_openai_client() is not None)
+    all_vocab = [
+        {
+            "uid": _make_uid(v),
+            "fremdsprache": v.get("fremdsprache", ""),
+            "deutsch": v.get("deutsch", ""),
+            "deklination": v.get("deklination", ""),
+            "lektion": v.get("lektion", ""),
+        }
+        for v in vokabeln
+    ]
     return render_template(
         "index.html",
-        lektionen=alle_lektionen(vokabeln),
+        lektionen=lektionen,
         total=len(vokabeln),
-        error=None if vokabeln else f"{VOKABEL_DATEI} wurde nicht gefunden oder ist leer.",
+        error=None if vokabeln else f"{source_path} wurde nicht gefunden oder ist leer.",
         status=status,
         message=message,
         tts_ready=tts_ready,
         has_runtime_key=has_runtime_key,
+        prefs=prefs,
+        sources=_available_sources(),
+        selected_source_id=selected_source_id,
+        all_vocab=all_vocab,
     )
 
 
 @app.get("/learn")
 def learn_home():
-    vokabeln = lade_vokabeln_full()
+    prefs = _load_learning_prefs()
+    source_path = _resolve_source_from_id(prefs.get("source_id"))
+    selected_source_id = _source_id_for_path(source_path)
+    vokabeln = lade_vokabeln_full(source_path)
+    lektionen = alle_lektionen(vokabeln)
+    valid_uids = {_make_uid(v) for v in vokabeln}
+    prefs["selected_lektionen"] = [l for l in prefs.get("selected_lektionen", []) if l in lektionen]
+    prefs["selected_uids"] = [u for u in prefs.get("selected_uids", []) if u in valid_uids]
+    prefs["source_id"] = selected_source_id
     status = request.args.get("status")
     message = request.args.get("message")
+    all_vocab = [
+        {
+            "uid": _make_uid(v),
+            "fremdsprache": v.get("fremdsprache", ""),
+            "deutsch": v.get("deutsch", ""),
+            "deklination": v.get("deklination", ""),
+            "lektion": v.get("lektion", ""),
+        }
+        for v in vokabeln
+    ]
     return render_template(
         "learn.html",
-        lektionen=alle_lektionen(vokabeln),
+        lektionen=lektionen,
         total=len(vokabeln),
-        error=None if vokabeln else f"{VOKABEL_DATEI} wurde nicht gefunden oder ist leer.",
+        error=None if vokabeln else f"{source_path} wurde nicht gefunden oder ist leer.",
         status=status,
         message=message,
+        prefs=prefs,
+        sources=_available_sources(),
+        selected_source_id=selected_source_id,
+        all_vocab=all_vocab,
     )
 
 
@@ -512,7 +707,9 @@ def logout():
 
 @app.get("/manage_vocab")
 def manage_vocab():
-    vokabeln = lade_vokabeln_full()
+    source_id = request.args.get("source_id") or _load_learning_prefs().get("source_id", DEFAULT_SOURCE_ID)
+    source_path = _resolve_source_from_id(source_id)
+    vokabeln = lade_vokabeln_full(source_path)
     grouped = {}
     for v in vokabeln:
         lek = v.get("lektion", "")
@@ -523,6 +720,9 @@ def manage_vocab():
         grouped=grouped,
         lessons=sorted_lessons,
         total=len(vokabeln),
+        can_edit=_is_admin() and source_path == VOKABEL_DATEI,
+        source_id=_source_id_for_path(source_path),
+        sources=_available_sources(),
     )
 
 
@@ -596,6 +796,103 @@ def audio_files():
     return render_template("audio_files.html", files=files, total=len(files))
 
 
+@app.get("/export_csv")
+def export_csv():
+    if not VOKABEL_DATEI.exists():
+        return redirect(url_for("index", status="error", message="CSV nicht gefunden."))
+    return send_file(
+        str(VOKABEL_DATEI),
+        as_attachment=True,
+        download_name=f"vokabeln_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mimetype="text/csv",
+    )
+
+
+@app.get("/export_audio_zip")
+def export_audio_zip():
+    memory = io.BytesIO()
+    with zipfile.ZipFile(memory, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for p in sorted(AUDIO_CACHE_DIR.glob("*.mp3"), key=lambda x: x.name.lower()):
+            zf.write(p, arcname=p.name)
+    memory.seek(0)
+    return send_file(
+        memory,
+        as_attachment=True,
+        download_name=f"audio_cache_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+        mimetype="application/zip",
+    )
+
+
+@app.post("/import_csv")
+def import_csv():
+    upload = request.files.get("csv_file")
+    if upload is None or not upload.filename:
+        return redirect(url_for("index", status="error", message="Bitte eine CSV-Datei auswaehlen."))
+
+    safe_stem = _sanitize_import_name(upload.filename)
+    target_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{safe_stem}.csv"
+    target_path = (IMPORTS_DIR / target_name).resolve()
+    if not _is_path_within(IMPORTS_DIR, target_path):
+        return redirect(url_for("index", status="error", message="Ungueltiger Dateiname."))
+
+    try:
+        text = upload.read().decode("utf-8-sig")
+    except Exception:
+        return redirect(url_for("index", status="error", message="CSV konnte nicht als UTF-8 gelesen werden."))
+
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        return redirect(url_for("index", status="error", message="CSV ohne Header."))
+
+    norm_fields = {str(x).strip().lower(): x for x in reader.fieldnames}
+    required = ["fremdsprache", "deutsch", "lektion"]
+    if any(r not in norm_fields for r in required):
+        return redirect(
+            url_for(
+                "index",
+                status="error",
+                message="CSV braucht Header: fremdsprache,deutsch,lektion (deklination optional).",
+            )
+        )
+
+    rows = []
+    for row in reader:
+        fremd = (row.get(norm_fields["fremdsprache"]) or "").strip()
+        de = (row.get(norm_fields["deutsch"]) or "").strip()
+        lek = (row.get(norm_fields["lektion"]) or "").strip()
+        dekl = (row.get(norm_fields.get("deklination", "")) or "").strip() if "deklination" in norm_fields else ""
+        if not fremd and not de and not lek and not dekl:
+            continue
+        if not fremd or not de or not lek:
+            continue
+        rows.append(
+            {
+                "fremdsprache": fremd,
+                "deutsch": de,
+                "deklination": dekl,
+                "lektion": lek,
+                "richtig": 0,
+                "falsch": 0,
+            }
+        )
+
+    if not rows:
+        return redirect(url_for("index", status="error", message="CSV enthaelt keine gueltigen Zeilen."))
+
+    speichere_vokabeln_full(rows, csv_path=target_path)
+    prefs = _load_learning_prefs()
+    prefs["source_id"] = target_path.name
+    session["learning_prefs"] = prefs
+
+    return redirect(
+        url_for(
+            "index",
+            status="ok",
+            message=f"CSV importiert: {target_path.name} ({len(rows)} Eintraege).",
+        )
+    )
+
+
 @app.post("/build_tts_cache")
 def build_tts_cache():
     vokabeln = lade_vokabeln_full()
@@ -656,76 +953,122 @@ def set_api_key():
 
 @app.post("/add_vocab")
 def add_vocab():
-    fremdsprache = (request.form.get("fremdsprache") or "").strip()
-    deutsch = (request.form.get("deutsch") or "").strip()
-    deklination = (request.form.get("deklination") or "").strip()
-    lektion = (request.form.get("lektion") or "").strip()
+    fremd_list = request.form.getlist("fremdsprache[]") or [request.form.get("fremdsprache", "")]
+    deutsch_list = request.form.getlist("deutsch[]") or [request.form.get("deutsch", "")]
+    dekl_list = request.form.getlist("deklination[]") or [request.form.get("deklination", "")]
+    lektion_list = request.form.getlist("lektion[]") or [request.form.get("lektion", "")]
 
-    if not fremdsprache or not deutsch or not lektion:
+    max_len = max(len(fremd_list), len(deutsch_list), len(dekl_list), len(lektion_list))
+    rows = []
+    for i in range(max_len):
+        fremd = (fremd_list[i] if i < len(fremd_list) else "").strip()
+        deutsch = (deutsch_list[i] if i < len(deutsch_list) else "").strip()
+        deklination = (dekl_list[i] if i < len(dekl_list) else "").strip()
+        lektion = (lektion_list[i] if i < len(lektion_list) else "").strip()
+        if not fremd and not deutsch and not deklination and not lektion:
+            continue
+        rows.append(
+            {
+                "fremdsprache": fremd,
+                "deutsch": deutsch,
+                "deklination": deklination,
+                "lektion": lektion,
+                "richtig": 0,
+                "falsch": 0,
+            }
+        )
+
+    if not rows:
+        return redirect(url_for("index", status="error", message="Keine Vokabeln uebergeben."))
+
+    if any((not r["fremdsprache"] or not r["deutsch"] or not r["lektion"]) for r in rows):
         return redirect(
             url_for(
                 "index",
                 status="error",
-                message="Bitte Fremdsprache, Deutsch und Lektion ausfuellen.",
+                message="Bitte in jeder Zeile Fremdsprache, Deutsch und Lektion ausfuellen.",
             )
         )
 
-    master = lade_vokabeln_full()
-    new_uid = _make_uid(
-        {"fremdsprache": fremdsprache, "deutsch": deutsch, "lektion": lektion}
-    )
-    for v in master:
-        if _make_uid(v) == new_uid:
-            return redirect(
-                url_for(
-                    "index",
-                    status="error",
-                    message="Diese Vokabel existiert bereits in der gewaehlten Lektion.",
-                )
-            )
+    added = 0
+    duplicates = 0
+    with _locked_vocab_update() as master:
+        existing_uids = {_make_uid(v) for v in master}
+        input_uids = set()
+        for row in rows:
+            uid = _make_uid(row)
+            if uid in existing_uids or uid in input_uids:
+                duplicates += 1
+                continue
+            master.append(row)
+            existing_uids.add(uid)
+            input_uids.add(uid)
+            added += 1
 
-    master.append(
-        {
-            "fremdsprache": fremdsprache,
-            "deutsch": deutsch,
-            "deklination": deklination,
-            "lektion": lektion,
-            "richtig": 0,
-            "falsch": 0,
-        }
-    )
-    speichere_vokabeln_full(master)
+    if added == 0:
+        return redirect(url_for("index", status="error", message="Alle Eintraege waren Duplikate."))
 
-    return redirect(
-        url_for(
-            "index",
-            status="ok",
-            message=f"Vokabel gespeichert: {fremdsprache} -> {deutsch}",
-        )
-    )
+    msg = f"{added} Vokabel(n) gespeichert."
+    if duplicates:
+        msg += f" Duplikate uebersprungen: {duplicates}."
+    return redirect(url_for("index", status="ok", message=msg))
 
 
 @app.post("/start")
 def start():
-    vokabeln = lade_vokabeln_full()
+    prefs = _load_learning_prefs()
+    source_id = (request.form.get("source_id") or prefs.get("source_id") or DEFAULT_SOURCE_ID).strip()
+    source_path = _resolve_source_from_id(source_id)
+    source_id = _source_id_for_path(source_path)
+
+    vokabeln = lade_vokabeln_full(source_path)
     if not vokabeln:
-        return redirect(url_for(_home_endpoint()))
+        return redirect(url_for(_home_endpoint(), status="error", message=f"Quelle ist leer: {source_path.name}"))
 
-    mode = request.form.get("mode", "kartei")
+    mode = (request.form.get("mode") or prefs.get("mode") or "kartei").strip().lower()
+    if mode not in ALLOWED_MODES:
+        mode = "kartei"
+
     selected_lektionen = request.form.getlist("lektionen")
+    lessons = alle_lektionen(vokabeln)
     if not selected_lektionen:
-        selected_lektionen = alle_lektionen(vokabeln)
+        selected_lektionen = [x for x in prefs.get("selected_lektionen", []) if x in lessons]
+    if not selected_lektionen:
+        selected_lektionen = lessons
 
-    block_size = _safe_positive_int(request.form.get("block_size", "5"), 5)
-    repetitions = _safe_positive_int(request.form.get("repetitions", "1"), 1)
-    repeats_per_word = _safe_positive_int(request.form.get("repeats_per_word", "5"), 5)
-    total_rounds = _safe_positive_int(request.form.get("total_rounds", "3"), 3)
-    block_selection = request.form.get("block_selection", "alle").strip().lower() or "alle"
+    valid_uids = {_make_uid(v) for v in vokabeln}
+    selected_uids = [u for u in request.form.getlist("selected_uids") if u in valid_uids]
+
+    block_size = _safe_positive_int(request.form.get("block_size", str(prefs.get("block_size", 5))), 5)
+    repetitions = _safe_positive_int(request.form.get("repetitions", str(prefs.get("repetitions", 1))), 1)
+    repeats_per_word = _safe_positive_int(request.form.get("repeats_per_word", str(prefs.get("repeats_per_word", 5))), 5)
+    total_rounds = _safe_positive_int(request.form.get("total_rounds", str(prefs.get("total_rounds", 3))), 3)
+    block_selection = request.form.get("block_selection", prefs.get("block_selection", "alle")).strip().lower() or "alle"
+
+    with_declension_answer = request.form.get("with_declension_answer") == "on"
+    show_declension_inline = request.form.get("show_declension_inline") == "on"
+    audio_enabled = request.form.get("audio_enabled") == "on"
+
+    session["learning_prefs"] = {
+        "mode": mode,
+        "block_size": block_size,
+        "repetitions": repetitions,
+        "block_selection": block_selection,
+        "repeats_per_word": repeats_per_word,
+        "total_rounds": total_rounds,
+        "with_declension_answer": with_declension_answer,
+        "show_declension_inline": show_declension_inline,
+        "audio_enabled": audio_enabled,
+        "selected_lektionen": selected_lektionen,
+        "selected_uids": selected_uids,
+        "source_id": source_id,
+    }
 
     if mode == "auto_audio":
         playlist, playable_words, skipped_words, selected_words = _build_auto_audio_playlist(
             vokabeln=vokabeln,
             selected_lektionen=selected_lektionen,
+            selected_uids=selected_uids,
             block_size=block_size,
             block_selection=block_selection,
             repeats_per_word=repeats_per_word,
@@ -749,12 +1092,18 @@ def start():
             total_rounds=total_rounds,
         )
 
-    queue = _build_queue(vokabeln, mode, selected_lektionen, block_size, block_selection, repetitions)
-    random.shuffle(queue)
+    queue = _build_queue(vokabeln, mode, selected_lektionen, selected_uids, block_size, block_selection, repetitions)
+    if mode != "block":
+        random.shuffle(queue)
 
     session["state"] = {
         "mode": mode,
+        "source_id": source_id,
         "selected_lektionen": selected_lektionen,
+        "selected_uids": selected_uids,
+        "with_declension_answer": with_declension_answer,
+        "show_declension_inline": show_declension_inline,
+        "audio_enabled": audio_enabled,
         "queue": queue,
         "index": 0,
         "wrong": [],
@@ -779,8 +1128,15 @@ def quiz():
     item = queue[idx]
     v = item["display"]
     mode = state.get("mode", "kartei")
-    audio_rel = _cached_audio_rel_path(item["uid"], "lat", v.get("fremdsprache", ""))
-    question_audio_url = url_for("static", filename=audio_rel) if audio_rel else None
+    audio_enabled = bool(state.get("audio_enabled", True))
+    question_audio_url = None
+    if audio_enabled:
+        audio_rel = _cached_audio_rel_path(item["uid"], "lat", v.get("fremdsprache", ""))
+        question_audio_url = url_for("static", filename=audio_rel) if audio_rel else None
+
+    answer_hint = "Gib die deutsche Bedeutung ein."
+    if state.get("with_declension_answer"):
+        answer_hint = "Gib erst die Uebersetzung, dann Leerzeichen, dann die Deklination ein."
 
     return render_template(
         "quiz.html",
@@ -790,6 +1146,9 @@ def quiz():
         vokabel=v,
         uid=item["uid"],
         question_audio_url=question_audio_url,
+        audio_enabled=audio_enabled,
+        show_declension_inline=bool(state.get("show_declension_inline", False)),
+        answer_hint=answer_hint,
     )
 
 
@@ -809,15 +1168,14 @@ def answer():
     uid = request.form.get("uid", "")
     user_answer = request.form.get("answer", "")
 
-    if mode == "abschreiben":
-        state["index"] = idx + 1
-        state["last_feedback"] = None
-        session["state"] = state
-        return redirect(url_for("quiz"))
-
-    master = lade_vokabeln_full()
-    correct, expected = _apply_scoring(uid, mode, user_answer, master)
-    speichere_vokabeln_full(master)
+    source_path = _resolve_source_from_id(state.get("source_id"))
+    with _locked_vocab_update(source_path) as master:
+        correct, expected = _apply_scoring(
+            uid,
+            user_answer,
+            master,
+            with_declension_answer=bool(state.get("with_declension_answer", False)),
+        )
 
     if not correct:
         state.setdefault("wrong", []).append(
@@ -837,9 +1195,11 @@ def answer():
     state["index"] = idx + 1
     session["state"] = state
 
-    translation_text = queue[idx]["display"].get("deutsch", "")
-    answer_audio_rel = _cached_audio_rel_path(uid, "de", translation_text)
-    answer_audio_url = url_for("static", filename=answer_audio_rel) if answer_audio_rel else None
+    answer_audio_url = None
+    if bool(state.get("audio_enabled", True)):
+        translation_text = queue[idx]["display"].get("deutsch", "")
+        answer_audio_rel = _cached_audio_rel_path(uid, "de", translation_text)
+        answer_audio_url = url_for("static", filename=answer_audio_rel) if answer_audio_rel else None
 
     return render_template(
         "feedback.html",
@@ -849,6 +1209,7 @@ def answer():
         mode=mode,
         can_mark_correct=(not correct),
         answer_audio_url=answer_audio_url,
+        audio_enabled=bool(state.get("audio_enabled", True)),
     )
 
 
@@ -870,14 +1231,14 @@ def mark_correct():
     uid = last_feedback.get("uid", "")
     question_idx = last_feedback.get("question_idx")
 
-    master = lade_vokabeln_full()
-    for v in master:
-        if _make_uid(v) != uid:
-            continue
-        v["falsch"] = max(0, _to_int(v.get("falsch", 0)) - 1)
-        v["richtig"] = _to_int(v.get("richtig", 0)) + 1
-        break
-    speichere_vokabeln_full(master)
+    source_path = _resolve_source_from_id(state.get("source_id"))
+    with _locked_vocab_update(source_path) as master:
+        for v in master:
+            if _make_uid(v) != uid:
+                continue
+            v["falsch"] = max(0, _to_int(v.get("falsch", 0)) - 1)
+            v["richtig"] = _to_int(v.get("richtig", 0)) + 1
+            break
 
     wrong = state.get("wrong", [])
     state["wrong"] = [w for w in wrong if w.get("question_idx") != question_idx]
@@ -921,4 +1282,4 @@ def back_to_selection():
 
 if __name__ == "__main__":
     port = _safe_positive_int(os.getenv("PORT", "8090"), 8090)
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=port, debug=False)

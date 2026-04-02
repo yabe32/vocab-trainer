@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="de">
 <head>
   <meta charset="utf-8">
@@ -10,9 +10,10 @@
   <main class="container">
     <h1>Vokabeltrainer</h1>
     <form action="{{ url_for('logout') }}" method="post" class="topbar-form">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="button secondary">Code wechseln</button>
     </form>
-    <p class="muted">Datensätze in CSV: {{ total }}</p>
+    <p class="muted">Datensaetze in Quelle: {{ total }}</p>
 
     {% if message %}
       <div class="card {{ 'ok' if status == 'ok' else 'error' }}">{{ message }}</div>
@@ -21,55 +22,85 @@
     {% if error %}
       <div class="card error">{{ error }}</div>
     {% else %}
-      <form action="{{ url_for('start') }}" method="post" class="card grid">
+      <form action="{{ url_for('start') }}" method="post" class="card grid" id="learn-form">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <h2>Lernen starten</h2>
-        <label>Modus
-          <select name="mode" id="mode-select">
-            <option value="kartei">Kartei</option>
-            <option value="abschreiben">Abschreiben</option>
-            <option value="deklination">Deklination</option>
-            <option value="block">Block-Modus</option>
-            <option value="auto_audio">Auto-Audio-Modus</option>
-            <option value="fehler">Meiste Fehler zuerst</option>
+
+        <label>Quelle
+          <select name="source_id">
+            {% for s in sources %}
+              <option value="{{ s.id }}" {% if selected_source_id == s.id %}selected{% endif %}>{{ s.label }}</option>
+            {% endfor %}
           </select>
         </label>
+
+        <label>Modus
+          <select name="mode" id="mode-select">
+            <option value="kartei" {% if prefs.mode == 'kartei' %}selected{% endif %}>Kartei</option>
+            <option value="block" {% if prefs.mode == 'block' %}selected{% endif %}>Block-Modus</option>
+            <option value="auto_audio" {% if prefs.mode == 'auto_audio' %}selected{% endif %}>Auto-Audio-Modus</option>
+          </select>
+        </label>
+
+        <fieldset>
+          <legend>Optionen</legend>
+          <label><input type="checkbox" name="with_declension_answer" {% if prefs.with_declension_answer %}checked{% endif %}> Antwort mit Deklination (Format: Uebersetzung + Leerzeichen + Deklination)</label>
+          <label><input type="checkbox" name="show_declension_inline" {% if prefs.show_declension_inline %}checked{% endif %}> Deklination beim Fremdwort anzeigen</label>
+          <label><input type="checkbox" name="audio_enabled" {% if prefs.audio_enabled %}checked{% endif %}> Ton aktiv</label>
+        </fieldset>
 
         <fieldset>
           <legend>Lektionen</legend>
           <div class="lesson-grid">
             {% for l in lektionen %}
-              <label><input type="checkbox" name="lektionen" value="{{ l }}"> Lektion {{ l }}</label>
+              <label><input type="checkbox" name="lektionen" value="{{ l }}" {% if l in prefs.selected_lektionen %}checked{% endif %}> Lektion {{ l }}</label>
             {% endfor %}
           </div>
-          <p class="hint">Wenn nichts angehakt ist, werden automatisch alle Lektionen genutzt.</p>
+          <p class="hint">Wenn nichts angehakt ist, werden alle Lektionen genutzt.</p>
+        </fieldset>
+
+        <fieldset>
+          <legend>Vokabeln gezielt auswaehlen (optional)</legend>
+          <div class="actions">
+            <button type="button" class="secondary" id="select-all-words">Alle auswaehlen</button>
+            <button type="button" class="secondary" id="clear-all-words">Auswahl loeschen</button>
+          </div>
+          <div class="vocab-list">
+            {% for v in all_vocab %}
+              <label class="vocab-row">
+                <input type="checkbox" class="word-checkbox" name="selected_uids" value="{{ v.uid }}" data-lesson="{{ v.lektion }}" {% if v.uid in prefs.selected_uids %}checked{% endif %}>
+                <span>{{ v.fremdsprache }} -> {{ v.deutsch }}{% if v.deklination %} ({{ v.deklination }}){% endif %} [Lektion {{ v.lektion }}]</span>
+              </label>
+            {% endfor %}
+          </div>
         </fieldset>
 
         <div id="block-settings" class="block-settings hidden">
-          <label>Blockgröße
-            <input type="number" name="block_size" min="1" value="5">
+          <label>Blockgroesse
+            <input type="number" name="block_size" min="1" value="{{ prefs.block_size }}">
           </label>
           <label>Wiederholungen
-            <input type="number" name="repetitions" min="1" value="1">
+            <input type="number" name="repetitions" min="1" value="{{ prefs.repetitions }}">
           </label>
-          <label>Blöcke
-            <input type="text" name="block_selection" value="alle" placeholder="z.B. 1,3 oder alle">
+          <label>Bloecke
+            <input type="text" name="block_selection" value="{{ prefs.block_selection }}" placeholder="z.B. 1,3 oder alle">
           </label>
+          <div class="hint" id="block-preview">Blockvorschau wird geladen ...</div>
         </div>
 
         <div id="auto-audio-settings" class="block-settings hidden">
-          <label>Blockgröße (z.B. 5 Wörter)
-            <input type="number" name="block_size" min="1" value="5">
+          <label>Blockgroesse
+            <input type="number" name="block_size" min="1" value="{{ prefs.block_size }}">
           </label>
-          <label>Blöcke (z.B. 1 oder 1,2,3 oder alle)
-            <input type="text" name="block_selection" value="alle" placeholder="z.B. 1,2,3 oder alle">
+          <label>Bloecke
+            <input type="text" name="block_selection" value="{{ prefs.block_selection }}" placeholder="z.B. 1,2 oder alle">
           </label>
           <label>Wiederholungen pro Wort
-            <input type="number" name="repeats_per_word" min="1" value="5">
+            <input type="number" name="repeats_per_word" min="1" value="{{ prefs.repeats_per_word }}">
           </label>
           <label>Wiederholungen insgesamt
-            <input type="number" name="total_rounds" min="1" value="3">
+            <input type="number" name="total_rounds" min="1" value="{{ prefs.total_rounds }}">
           </label>
-          <p class="hint">Automatisch: Fremdwort-Audio und danach Deutsch-Audio, ohne Klicks.</p>
         </div>
 
         <button type="submit">Lernen starten</button>
@@ -77,29 +108,39 @@
     {% endif %}
 
     <div class="card grid">
-      <h2>Audio Übersicht</h2>
-      <a class="button" href="{{ url_for('audio_files') }}">Alle Audio-Dateien anzeigen</a>
-      <a class="button secondary" href="{{ url_for('manage_vocab') }}">Vokabeln / Lektionen bearbeiten</a>
+      <h2>Dateien und Verwaltung</h2>
+      <div class="actions">
+        <a class="button" href="{{ url_for('audio_files') }}">Audio-Dateien anzeigen</a>
+        <a class="button secondary" href="{{ url_for('manage_vocab', source_id=selected_source_id) }}">Vokabeln einsehen</a>
+        <a class="button secondary" href="{{ url_for('export_csv') }}">CSV exportieren</a>
+        <a class="button secondary" href="{{ url_for('export_audio_zip') }}">Audios exportieren (ZIP)</a>
+      </div>
+      <form action="{{ url_for('import_csv') }}" method="post" enctype="multipart/form-data" class="grid">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <label>CSV importieren
+          <input type="file" name="csv_file" accept=".csv" required>
+        </label>
+        <button type="submit">CSV importieren</button>
+      </form>
     </div>
 
     <form action="{{ url_for('set_api_key') }}" method="post" class="card grid">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <h2>OpenAI API Key</h2>
-      <label>API Key (wird serverseitig gespeichert)
+      <label>API Key (serverseitig gespeichert)
         <input type="password" name="openai_api_key" placeholder="sk-..." autocomplete="off">
       </label>
-      <div class="actions">
-        <button type="submit">Key speichern</button>
-      </div>
+      <button type="submit">Key speichern</button>
       {% if has_runtime_key %}
-        <p class="hint">Aktuell ist ein Browser-Key gespeichert. Leeres Feld absenden entfernt ihn wieder.</p>
+        <p class="hint">Aktuell ist ein Browser-Key gespeichert. Leeres Feld entfernt ihn.</p>
       {% else %}
         <p class="hint">Wenn hier kein Key gespeichert ist, wird der Key aus `.env` verwendet.</p>
       {% endif %}
     </form>
 
     <form action="{{ url_for('build_tts_cache') }}" method="post" class="card grid">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <h2>Audio Cache</h2>
-      <p class="hint">Erzeugt alle fehlenden Audio-Dateien. Es läuft streng nacheinander: eine Anfrage, auf fertige MP3 warten, dann die nächste.</p>
       {% if tts_ready %}
         <button type="submit">Audio-Dateien jetzt erzeugen</button>
       {% else %}
@@ -107,21 +148,14 @@
       {% endif %}
     </form>
 
-    <form action="{{ url_for('add_vocab') }}" method="post" class="card grid">
-      <h2>Neue Vokabel einfügen</h2>
-      <label>Fremdsprache
-        <input type="text" name="fremdsprache" required>
-      </label>
-      <label>Deutsch
-        <input type="text" name="deutsch" required>
-      </label>
-      <label>Deklinations-Info (optional)
-        <input type="text" name="deklination">
-      </label>
-      <label>Lektion
-        <input type="text" name="lektion" placeholder="z.B. 1" required>
-      </label>
-      <button type="submit">Vokabel speichern</button>
+    <form action="{{ url_for('add_vocab') }}" method="post" class="card grid" id="bulk-add-form">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <h2>Neue Vokabeln einfuegen</h2>
+      <div id="bulk-rows"></div>
+      <div class="actions">
+        <button type="button" class="secondary" id="add-row-btn">Weitere Zeile</button>
+        <button type="submit">Vokabeln speichern</button>
+      </div>
     </form>
   </main>
 
@@ -129,19 +163,88 @@
     const modeSelect = document.getElementById('mode-select');
     const blockSettings = document.getElementById('block-settings');
     const autoAudioSettings = document.getElementById('auto-audio-settings');
+    const wordCheckboxes = Array.from(document.querySelectorAll('.word-checkbox'));
+    const selectAllBtn = document.getElementById('select-all-words');
+    const clearAllBtn = document.getElementById('clear-all-words');
+    const blockPreview = document.getElementById('block-preview');
+    const bulkRows = document.getElementById('bulk-rows');
+    const addRowBtn = document.getElementById('add-row-btn');
+    const allVocab = {{ all_vocab | tojson }};
 
-    function toggleBlockSettings() {
+    function getBlockSize() {
+      const inp = document.querySelector('#block-settings input[name="block_size"]');
+      const n = parseInt(inp ? inp.value : '5', 10);
+      return Number.isFinite(n) && n > 0 ? n : 5;
+    }
+
+    function selectedLessons() {
+      return new Set(Array.from(document.querySelectorAll('input[name="lektionen"]:checked')).map(i => i.value));
+    }
+
+    function selectedUids() {
+      return new Set(wordCheckboxes.filter(cb => cb.checked).map(cb => cb.value));
+    }
+
+    function refreshBlockPreview() {
+      if (!blockPreview) return;
+      const lessons = selectedLessons();
+      const chosenUids = selectedUids();
+      const filtered = allVocab.filter(v => lessons.has(v.lektion)).filter(v => chosenUids.size ? chosenUids.has(v.uid) : true);
+      const size = getBlockSize();
+      if (!filtered.length) {
+        blockPreview.textContent = 'Keine Vokabeln in der aktuellen Auswahl.';
+        return;
+      }
+      const blocks = [];
+      for (let i = 0; i < filtered.length; i += size) blocks.push(filtered.slice(i, i + size));
+      const lines = blocks.map((b, idx) => `Block ${idx + 1} (${b.length}): ${b.map(x => x.fremdsprache).join(', ')}`);
+      blockPreview.textContent = lines.join(' | ');
+    }
+
+    function toggleModeSections() {
       if (!modeSelect) return;
       const blockActive = modeSelect.value === 'block';
       const autoActive = modeSelect.value === 'auto_audio';
       if (blockSettings) blockSettings.classList.toggle('hidden', !blockActive);
       if (autoAudioSettings) autoAudioSettings.classList.toggle('hidden', !autoActive);
+      refreshBlockPreview();
+    }
+
+    function createRow() {
+      const wrap = document.createElement('div');
+      wrap.className = 'block-settings';
+      wrap.innerHTML = `
+        <label>Fremdsprache
+          <input type="text" name="fremdsprache[]" required>
+        </label>
+        <label>Deutsch
+          <input type="text" name="deutsch[]" required>
+        </label>
+        <label>Deklinations-Info (optional)
+          <input type="text" name="deklination[]">
+        </label>
+        <label>Lektion
+          <input type="text" name="lektion[]" placeholder="z.B. 1" required>
+        </label>
+      `;
+      bulkRows.appendChild(wrap);
     }
 
     if (modeSelect) {
-      modeSelect.addEventListener('change', toggleBlockSettings);
-      toggleBlockSettings();
+      modeSelect.addEventListener('change', toggleModeSections);
+      toggleModeSections();
     }
+    document.querySelectorAll('input[name="lektionen"]').forEach(cb => cb.addEventListener('change', refreshBlockPreview));
+    wordCheckboxes.forEach(cb => cb.addEventListener('change', refreshBlockPreview));
+    const blockSizeInput = document.querySelector('#block-settings input[name="block_size"]');
+    if (blockSizeInput) blockSizeInput.addEventListener('input', refreshBlockPreview);
+
+    if (selectAllBtn) selectAllBtn.addEventListener('click', () => { wordCheckboxes.forEach(cb => cb.checked = true); refreshBlockPreview(); });
+    if (clearAllBtn) clearAllBtn.addEventListener('click', () => { wordCheckboxes.forEach(cb => cb.checked = false); refreshBlockPreview(); });
+
+    if (addRowBtn) addRowBtn.addEventListener('click', createRow);
+    createRow();
+    refreshBlockPreview();
   </script>
 </body>
 </html>

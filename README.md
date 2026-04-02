@@ -89,13 +89,16 @@ Setup ausführen:
 ./scripts/setup_server.sh
 ```
 
-OpenAI API Key setzen (`.env`):
+Sicherheitsrelevante Werte in `.env` setzen (Pflicht):
 
 ```bash
+echo "FLASK_SECRET_KEY=BITTE_MIN_32_ZEICHEN_LANG" >> .env
+echo "ADMIN_ACCESS_CODE=dein_admin_code" >> .env
+echo "LEARNER_ACCESS_CODE=dein_lern_code" >> .env
 echo "OPENAI_API_KEY=dein_key" >> .env
 ```
 
-Alternativ kannst du den Key auf der Startseite im Browser speichern.
+Alternativ kannst du den OpenAI-Key auf der Startseite im Browser speichern.
 Dann liegt er serverseitig in `data/runtime_secrets.json` (nicht im Git-Repo).
 
 Optionale Drosselung fuer den Audio-Build (`.env`):
@@ -123,17 +126,14 @@ Im Lernmodus werden fehlende Audios nicht mehr on-the-fly erzeugt, sondern nur b
 
 ## Rollen und Zugriffscode
 
-Beim ersten Aufruf wird ein Code abgefragt:
-
-- Admin-Code (Standard): `3647`
-- Lern-Code (Standard): `12321`
-
-Optional in `.env` anpassen:
+Beim ersten Aufruf wird ein Code abgefragt. Die Codes kommen aus `.env`:
 
 ```bash
-echo "ADMIN_ACCESS_CODE=3647" >> .env
-echo "LEARNER_ACCESS_CODE=12321" >> .env
+echo "ADMIN_ACCESS_CODE=dein_admin_code" >> .env
+echo "LEARNER_ACCESS_CODE=dein_lern_code" >> .env
 ```
+
+Hinweis: Seit den Security-Aenderungen gibt es keine unsicheren Standard-Codes mehr.
 
 Abbrechen mit `Ctrl+C`.
 

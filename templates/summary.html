@@ -9,6 +9,7 @@
 <body>
   <main class="container">
     <form action="{{ url_for('back_to_selection') }}" method="post" class="topbar-form" id="back-form">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="button secondary">Zur Auswahl</button>
     </form>
 
@@ -29,6 +30,7 @@
       {% endif %}
 
       <form action="{{ url_for('reset_state') }}" method="post">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <button type="submit">Neuen Durchgang starten</button>
       </form>
     </div>
