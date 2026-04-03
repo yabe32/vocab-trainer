@@ -1191,8 +1191,17 @@ def answer():
             }
         )
         if mode == "block" and idx < len(queue):
-            # Im Block-Modus: falsches Wort direkt als naechste Frage erneut einreihen.
-            queue.insert(idx + 1, {"uid": queue[idx]["uid"], "display": queue[idx]["display"]})
+            # Keine Extra-Frage erzeugen: nur eine spaetere, ohnehin geplante
+            # Wiederholung dieses Worts direkt nach vorne ziehen.
+            current_uid = queue[idx]["uid"]
+            next_same_idx = None
+            for pos in range(idx + 1, len(queue)):
+                if queue[pos]["uid"] == current_uid:
+                    next_same_idx = pos
+                    break
+            if next_same_idx is not None and next_same_idx != idx + 1:
+                moved = queue.pop(next_same_idx)
+                queue.insert(idx + 1, moved)
 
     state["last_feedback"] = {
         "uid": uid,
