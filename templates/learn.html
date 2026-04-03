@@ -40,6 +40,7 @@
           <select name="mode" id="mode-select">
             <option value="kartei" {% if prefs.mode == 'kartei' %}selected{% endif %}>Kartei</option>
             <option value="block" {% if prefs.mode == 'block' %}selected{% endif %}>Block-Modus</option>
+            <option value="durchlauf" {% if prefs.mode == 'durchlauf' %}selected{% endif %}>Durchlauf-Modus</option>
             <option value="auto_audio" {% if prefs.mode == 'auto_audio' %}selected{% endif %}>Auto-Audio-Modus</option>
           </select>
         </label>
@@ -104,6 +105,23 @@
           </label>
         </div>
 
+        <div id="through-settings" class="block-settings hidden">
+          <label>Blockgroesse
+            <input type="number" name="block_size" min="1" value="{{ prefs.block_size }}">
+          </label>
+          <label>Wiederholungen
+            <input type="number" name="repetitions" min="1" value="{{ prefs.repetitions }}">
+          </label>
+          <label>Bloecke
+            <input type="text" name="block_selection" value="{{ prefs.block_selection }}" placeholder="z.B. 1,2 oder alle">
+          </label>
+          <label><input type="checkbox" name="timer_enabled" {% if prefs.timer_enabled %}checked{% endif %}> Timer aktivieren</label>
+          <label>Sekunden pro Seite
+            <input type="number" name="timer_seconds" min="1" value="{{ prefs.timer_seconds }}">
+          </label>
+          <p class="hint">Durchlauf zeigt erst die Vokabel, dann die Uebersetzung.</p>
+        </div>
+
         <button type="submit">Lernen starten</button>
       </form>
     {% endif %}
@@ -118,6 +136,7 @@
     const modeSelect = document.getElementById('mode-select');
     const blockSettings = document.getElementById('block-settings');
     const autoAudioSettings = document.getElementById('auto-audio-settings');
+    const throughSettings = document.getElementById('through-settings');
     const wordCheckboxes = Array.from(document.querySelectorAll('.word-checkbox'));
     const selectAllBtn = document.getElementById('select-all-words');
     const clearAllBtn = document.getElementById('clear-all-words');
@@ -157,8 +176,10 @@
     function toggleModeSections() {
       if (!modeSelect) return;
       const blockActive = modeSelect.value === 'block';
+      const throughActive = modeSelect.value === 'durchlauf';
       const autoActive = modeSelect.value === 'auto_audio';
       if (blockSettings) blockSettings.classList.toggle('hidden', !blockActive);
+      if (throughSettings) throughSettings.classList.toggle('hidden', !throughActive);
       if (autoAudioSettings) autoAudioSettings.classList.toggle('hidden', !autoActive);
       refreshBlockPreview();
     }

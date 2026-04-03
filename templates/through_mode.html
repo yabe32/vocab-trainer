@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Durchlauf - Vokabeltrainer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <main class="container">
+    <form action="{{ url_for('back_to_selection') }}" method="post" class="topbar-form" id="back-form">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="button secondary">Zur Auswahl</button>
+    </form>
+
+    <div class="card grid">
+      <h1>Durchlauf-Modus</h1>
+      <p id="progress" class="muted">0 / 0</p>
+      <h2 id="side-label">Vokabel</h2>
+      <p id="word-text" style="font-size: 1.4rem; margin: 0;"></p>
+      <p class="hint">Enter: weiter | Leertaste: Pause/Weiter</p>
+
+      <div class="actions">
+        <button type="button" id="start-btn">Start</button>
+        <button type="button" id="next-btn" class="secondary">Weiter</button>
+        <button type="button" id="pause-btn" class="secondary">Pause</button>
+      </div>
+
+      <label><input type="checkbox" id="timer-enabled" {% if timer_enabled %}checked{% endif %}> Timer aktiv</label>
+      <label>Sekunden pro Seite
+        <input type="number" id="timer-seconds" min="1" value="{{ timer_seconds }}">
+      </label>
+    </div>
+  </main>
+
+  <script>
+    const queue = {{ queue | tojson }};
+    const showDeclensionInline = {{ show_declension_inline | tojson }};
+
+    const progressEl = document.getElementById("progress");
+    const sideLabelEl = document.getElementById("side-label");
+    const wordTextEl = document.getElementById("word-text");
+    const timerEnabledEl = document.getElementById("timer-enabled");
+    const timerSecondsEl = document.getElementById("timer-seconds");
+
+    const startBtn = document.getElementById("start-btn");
+    const nextBtn = document.getElementById("next-btn");
+    const pauseBtn = document.getElementById("pause-btn");
+
+    let index = 0;
+    let showingFront = true;
+    let started = false;
+    let paused = false;
+    let timerId = null;
+
+    function currentItem() {
+      return queue[index] || null;
+    }
+
+    function frontText(v) {
+      const latin = v.display.fremdsprache || "";
+      const decl = v.display.deklination || "";
+      if (showDeclensionInline && decl) return `${latin} (${decl})`;
+      return latin;
+    }
+
+    function backText(v) {
+      return v.display.deutsch || "";
+    }
+
+    function updateView() {
+      if (!queue.length) {
+        progressEl.textContent = "0 / 0";
+        sideLabelEl.textContent = "Keine Vokabeln";
+        wordTextEl.textContent = "";
+        clearTimer();
+        return;
+      }
+
+      if (index >= queue.length) {
+        progressEl.textContent = `${queue.length} / ${queue.length}`;
+        sideLabelEl.textContent = "Fertig";
+        wordTextEl.textContent = "Durchlauf beendet.";
+        clearTimer();
+        return;
+      }
+
+      const v = currentItem();
+      progressEl.textContent = `${index + 1} / ${queue.length}`;
+      sideLabelEl.textContent = showingFront ? "Vokabel" : "Uebersetzung";
+      wordTextEl.textContent = showingFront ? frontText(v) : backText(v);
+    }
+
+    function clearTimer() {
+      if (timerId) {
+        clearTimeout(timerId);
+        timerId = null;
+      }
+    }
+
+    function schedule() {
+      clearTimer();
+      if (!started || paused || !timerEnabledEl.checked || index >= queue.length) return;
+      const sec = Math.max(1, parseInt(timerSecondsEl.value || "1", 10));
+      timerId = setTimeout(() => {
+        if (showingFront) {
+          showingFront = false;
+        } else {
+          index += 1;
+          showingFront = true;
+        }
+        updateView();
+        schedule();
+      }, sec * 1000);
+    }
+
+    function nextStep() {
+      if (!started) return;
+      if (index >= queue.length) return;
+      if (showingFront) {
+        showingFront = false;
+      } else {
+        index += 1;
+        showingFront = true;
+      }
+      updateView();
+      schedule();
+    }
+
+    function start() {
+      started = true;
+      paused = false;
+      index = 0;
+      showingFront = true;
+      updateView();
+      schedule();
+    }
+
+    function togglePause() {
+      if (!started) return;
+      paused = !paused;
+      pauseBtn.textContent = paused ? "Weiter" : "Pause";
+      schedule();
+    }
+
+    startBtn.addEventListener("click", start);
+    nextBtn.addEventListener("click", nextStep);
+    pauseBtn.addEventListener("click", togglePause);
+    timerEnabledEl.addEventListener("change", schedule);
+    timerSecondsEl.addEventListener("change", schedule);
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        const backForm = document.getElementById("back-form");
+        if (backForm) {
+          event.preventDefault();
+          backForm.submit();
+        }
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        nextStep();
+        return;
+      }
+      if (event.key === " ") {
+        event.preventDefault();
+        togglePause();
+      }
+    });
+
+    updateView();
+  </script>
+</body>
+</html>

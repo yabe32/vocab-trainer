@@ -38,7 +38,7 @@ DATA_LOCK = threading.Lock()
 TTS_LOCK = threading.Lock()
 FIELDNAMES = ["fremdsprache", "deutsch", "deklination", "lektion", "richtig", "falsch"]
 DEFAULT_SOURCE_ID = "__default__"
-ALLOWED_MODES = {"kartei", "block", "auto_audio"}
+ALLOWED_MODES = {"kartei", "block", "auto_audio", "durchlauf"}
 TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
 TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "alloy")
 TTS_DELAY_SECONDS = float(os.getenv("TTS_DELAY_SECONDS", "0.8"))
@@ -148,6 +148,8 @@ def _load_learning_prefs():
         "block_size": 5,
         "repetitions": 1,
         "block_selection": "alle",
+        "timer_enabled": False,
+        "timer_seconds": 1,
         "repeats_per_word": 5,
         "total_rounds": 3,
         "with_declension_answer": False,
@@ -164,12 +166,14 @@ def _load_learning_prefs():
     prefs["mode"] = prefs.get("mode") if prefs.get("mode") in ALLOWED_MODES else "kartei"
     prefs["block_size"] = _safe_positive_int(prefs.get("block_size"), 5)
     prefs["repetitions"] = _safe_positive_int(prefs.get("repetitions"), 1)
+    prefs["timer_seconds"] = _safe_positive_int(prefs.get("timer_seconds"), 1)
     prefs["repeats_per_word"] = _safe_positive_int(prefs.get("repeats_per_word"), 5)
     prefs["total_rounds"] = _safe_positive_int(prefs.get("total_rounds"), 3)
     prefs["block_selection"] = (str(prefs.get("block_selection") or "alle").strip().lower() or "alle")
     prefs["with_declension_answer"] = bool(prefs.get("with_declension_answer"))
     prefs["show_declension_inline"] = bool(prefs.get("show_declension_inline"))
     prefs["audio_enabled"] = bool(prefs.get("audio_enabled", True))
+    prefs["timer_enabled"] = bool(prefs.get("timer_enabled", False))
     prefs["selected_lektionen"] = [str(x) for x in (prefs.get("selected_lektionen") or []) if str(x).strip()]
     prefs["selected_uids"] = [str(x) for x in (prefs.get("selected_uids") or []) if str(x).strip()]
     prefs["source_id"] = str(prefs.get("source_id") or DEFAULT_SOURCE_ID)
@@ -1045,6 +1049,7 @@ def start():
 
     block_size = _safe_positive_int(request.form.get("block_size", str(prefs.get("block_size", 5))), 5)
     repetitions = _safe_positive_int(request.form.get("repetitions", str(prefs.get("repetitions", 1))), 1)
+    timer_seconds = _safe_positive_int(request.form.get("timer_seconds", str(prefs.get("timer_seconds", 1))), 1)
     repeats_per_word = _safe_positive_int(request.form.get("repeats_per_word", str(prefs.get("repeats_per_word", 5))), 5)
     total_rounds = _safe_positive_int(request.form.get("total_rounds", str(prefs.get("total_rounds", 3))), 3)
     block_selection = request.form.get("block_selection", prefs.get("block_selection", "alle")).strip().lower() or "alle"
@@ -1052,12 +1057,15 @@ def start():
     with_declension_answer = request.form.get("with_declension_answer") == "on"
     show_declension_inline = request.form.get("show_declension_inline") == "on"
     audio_enabled = request.form.get("audio_enabled") == "on"
+    timer_enabled = request.form.get("timer_enabled") == "on"
 
     session["learning_prefs"] = {
         "mode": mode,
         "block_size": block_size,
         "repetitions": repetitions,
         "block_selection": block_selection,
+        "timer_enabled": timer_enabled,
+        "timer_seconds": timer_seconds,
         "repeats_per_word": repeats_per_word,
         "total_rounds": total_rounds,
         "with_declension_answer": with_declension_answer,
@@ -1094,6 +1102,32 @@ def start():
             skipped_words=skipped_words,
             repeats_per_word=repeats_per_word,
             total_rounds=total_rounds,
+        )
+
+    if mode == "durchlauf":
+        queue = _build_queue(
+            vokabeln=vokabeln,
+            mode="block",
+            selected_lektionen=selected_lektionen,
+            selected_uids=selected_uids,
+            block_size=block_size,
+            block_selection=block_selection,
+            repetitions=repetitions,
+        )
+        if not queue:
+            return redirect(
+                url_for(
+                    _home_endpoint(),
+                    status="error",
+                    message="Keine Vokabeln fuer den Durchlauf gefunden.",
+                )
+            )
+        return render_template(
+            "through_mode.html",
+            queue=queue,
+            timer_enabled=timer_enabled,
+            timer_seconds=timer_seconds,
+            show_declension_inline=show_declension_inline,
         )
 
     queue = _build_queue(vokabeln, mode, selected_lektionen, selected_uids, block_size, block_selection, repetitions)
