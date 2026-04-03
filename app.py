@@ -496,9 +496,12 @@ def _build_queue(vokabeln, mode, selected_lektionen, selected_uids, block_size, 
 
         queue = []
         for _ in range(repetitions):
+            round_items = []
             for block_idx in selected_block_indices:
                 for v in blocks[block_idx]:
-                    queue.append({"uid": _make_uid(v), "display": v})
+                    round_items.append({"uid": _make_uid(v), "display": v})
+            random.shuffle(round_items)
+            queue.extend(round_items)
         return queue
 
     return [{"uid": _make_uid(v), "display": v} for v in targets]
