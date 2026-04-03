@@ -1190,6 +1190,9 @@ def answer():
                 "answer": user_answer,
             }
         )
+        if mode == "block" and idx < len(queue):
+            # Im Block-Modus: falsches Wort direkt als naechste Frage erneut einreihen.
+            queue.insert(idx + 1, {"uid": queue[idx]["uid"], "display": queue[idx]["display"]})
 
     state["last_feedback"] = {
         "uid": uid,
