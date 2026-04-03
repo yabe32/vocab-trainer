@@ -46,6 +46,16 @@ TTS_MAX_NEW_PER_RUN = int(os.getenv("TTS_MAX_NEW_PER_RUN", "0"))
 _OPENAI_CLIENT = None
 RUNTIME_SECRETS_FILE = BASE_DIR / "data" / "runtime_secrets.json"
 TTS_BUILD_LOCK_FILE = BASE_DIR / "data" / "tts_build.lock"
+PERF_HISTORY_FILE = BASE_DIR / "data" / "performance_history.json"
+PERF_WINDOW_SIZE = 30
+DIFFICULTY_LEVELS = [1, 2, 3, 4, 5]
+DIFFICULTY_LABELS = {
+    1: "Leicht",
+    2: "Eher leicht",
+    3: "Mittel",
+    4: "Schwierig",
+    5: "Sehr schwierig",
+}
 ADMIN_ONLY_ENDPOINTS = {
     "audio_files",
     "build_tts_cache",
@@ -155,6 +165,8 @@ def _load_learning_prefs():
         "with_declension_answer": False,
         "show_declension_inline": False,
         "audio_enabled": True,
+        "difficulty_filter_enabled": False,
+        "selected_difficulties": [],
         "selected_lektionen": [],
         "selected_uids": [],
         "source_id": DEFAULT_SOURCE_ID,
@@ -174,14 +186,153 @@ def _load_learning_prefs():
     prefs["show_declension_inline"] = bool(prefs.get("show_declension_inline"))
     prefs["audio_enabled"] = bool(prefs.get("audio_enabled", True))
     prefs["timer_enabled"] = bool(prefs.get("timer_enabled", False))
+    prefs["difficulty_filter_enabled"] = bool(prefs.get("difficulty_filter_enabled", False))
     prefs["selected_lektionen"] = [str(x) for x in (prefs.get("selected_lektionen") or []) if str(x).strip()]
     prefs["selected_uids"] = [str(x) for x in (prefs.get("selected_uids") or []) if str(x).strip()]
+    selected_diff = []
+    for x in (prefs.get("selected_difficulties") or []):
+        try:
+            n = int(x)
+        except (TypeError, ValueError):
+            continue
+        if n in DIFFICULTY_LEVELS:
+            selected_diff.append(n)
+    prefs["selected_difficulties"] = sorted(set(selected_diff))
     prefs["source_id"] = str(prefs.get("source_id") or DEFAULT_SOURCE_ID)
     return prefs
 
 
 def _normalize_text(value):
     return " ".join((value or "").strip().lower().split())
+
+
+def _load_perf_history():
+    if not PERF_HISTORY_FILE.exists():
+        return {}
+    try:
+        data = json.loads(PERF_HISTORY_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for uid, values in data.items():
+        if not isinstance(uid, str) or not isinstance(values, list):
+            continue
+        cleaned = []
+        for v in values[-PERF_WINDOW_SIZE:]:
+            if v in (0, 1):
+                cleaned.append(v)
+            elif isinstance(v, bool):
+                cleaned.append(1 if v else 0)
+        out[uid] = cleaned
+    return out
+
+
+def _save_perf_history(history):
+    PERF_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PERF_HISTORY_FILE.write_text(json.dumps(history), encoding="utf-8")
+
+
+def _record_performance_result(uid, correct):
+    if not uid:
+        return
+    with DATA_LOCK:
+        history = _load_perf_history()
+        arr = list(history.get(uid, []))
+        arr.append(1 if correct else 0)
+        history[uid] = arr[-PERF_WINDOW_SIZE:]
+        _save_perf_history(history)
+
+
+def _replace_last_performance_result(uid, correct):
+    if not uid:
+        return
+    with DATA_LOCK:
+        history = _load_perf_history()
+        arr = list(history.get(uid, []))
+        if arr:
+            arr[-1] = 1 if correct else 0
+        else:
+            arr = [1 if correct else 0]
+        history[uid] = arr[-PERF_WINDOW_SIZE:]
+        _save_perf_history(history)
+
+
+def _remove_performance_history_for_uids(uids):
+    uids = {u for u in (uids or []) if u}
+    if not uids:
+        return
+    with DATA_LOCK:
+        history = _load_perf_history()
+        changed = False
+        for uid in uids:
+            if uid in history:
+                del history[uid]
+                changed = True
+        if changed:
+            _save_perf_history(history)
+
+
+def _difficulty_level_for_vocab(v, recent_history):
+    history = list(recent_history or [])
+    attempts_total = _to_int(v.get("richtig", 0)) + _to_int(v.get("falsch", 0))
+    if not history and attempts_total <= 0:
+        return 3
+
+    short = history[-10:] if history else []
+    long = history[-PERF_WINDOW_SIZE:] if history else []
+
+    if short:
+        acc_short = sum(short) / len(short)
+    else:
+        acc_short = 0.5
+    if long:
+        acc_long = sum(long) / len(long)
+    else:
+        acc_long = 0.5
+
+    wrong_last5 = 0
+    if long:
+        wrong_last5 = sum(1 for x in long[-5:] if x == 0)
+
+    recent_difficulty = (1.0 - (0.7 * acc_short + 0.3 * acc_long))
+    recent_difficulty = 0.75 * recent_difficulty + 0.25 * (wrong_last5 / 5.0)
+
+    global_wrong = _to_int(v.get("falsch", 0))
+    global_right = _to_int(v.get("richtig", 0))
+    global_attempts = global_right + global_wrong
+    global_error = (global_wrong / global_attempts) if global_attempts > 0 else 0.5
+
+    confidence = min(1.0, len(long) / 12.0)
+    score = confidence * recent_difficulty + (1.0 - confidence) * global_error
+
+    if score <= 0.15:
+        return 1
+    if score <= 0.35:
+        return 2
+    if score <= 0.55:
+        return 3
+    if score <= 0.75:
+        return 4
+    return 5
+
+
+def _difficulty_levels_for_vocab(vokabeln):
+    history = _load_perf_history()
+    levels = {}
+    for v in vokabeln:
+        uid = _make_uid(v)
+        levels[uid] = _difficulty_level_for_vocab(v, history.get(uid, []))
+    return levels
+
+
+def _difficulty_counts(vokabeln, levels):
+    counts = {lvl: 0 for lvl in DIFFICULTY_LEVELS}
+    for v in vokabeln:
+        lvl = levels.get(_make_uid(v), 3)
+        counts[lvl] = counts.get(lvl, 0) + 1
+    return counts
 
 
 def _expected_answer(v, with_declension_answer=False):
@@ -473,11 +624,45 @@ def _inject_csrf():
     return {"csrf_token": _csrf_token}
 
 
-def _build_queue(vokabeln, mode, selected_lektionen, selected_uids, block_size, block_selection, repetitions):
+def _filter_targets(
+    vokabeln,
+    selected_lektionen,
+    selected_uids,
+    difficulty_filter_enabled=False,
+    selected_difficulties=None,
+    difficulty_levels=None,
+):
     targets = [v for v in vokabeln if v.get("lektion") in selected_lektionen]
     if selected_uids:
         selected_uids_set = set(selected_uids)
         targets = [v for v in targets if _make_uid(v) in selected_uids_set]
+    if difficulty_filter_enabled:
+        selected_difficulties = set(selected_difficulties or DIFFICULTY_LEVELS)
+        difficulty_levels = difficulty_levels or {}
+        targets = [v for v in targets if difficulty_levels.get(_make_uid(v), 3) in selected_difficulties]
+    return targets
+
+
+def _build_queue(
+    vokabeln,
+    mode,
+    selected_lektionen,
+    selected_uids,
+    block_size,
+    block_selection,
+    repetitions,
+    difficulty_filter_enabled=False,
+    selected_difficulties=None,
+    difficulty_levels=None,
+):
+    targets = _filter_targets(
+        vokabeln=vokabeln,
+        selected_lektionen=selected_lektionen,
+        selected_uids=selected_uids,
+        difficulty_filter_enabled=difficulty_filter_enabled,
+        selected_difficulties=selected_difficulties,
+        difficulty_levels=difficulty_levels,
+    )
 
     if mode == "block":
         if not targets:
@@ -512,11 +697,24 @@ def _build_queue(vokabeln, mode, selected_lektionen, selected_uids, block_size, 
     return [{"uid": _make_uid(v), "display": v} for v in targets]
 
 
-def _select_words_by_blocks(vokabeln, selected_lektionen, selected_uids, block_size, block_selection):
-    targets = [v for v in vokabeln if v.get("lektion") in selected_lektionen]
-    if selected_uids:
-        selected_uids_set = set(selected_uids)
-        targets = [v for v in targets if _make_uid(v) in selected_uids_set]
+def _select_words_by_blocks(
+    vokabeln,
+    selected_lektionen,
+    selected_uids,
+    block_size,
+    block_selection,
+    difficulty_filter_enabled=False,
+    selected_difficulties=None,
+    difficulty_levels=None,
+):
+    targets = _filter_targets(
+        vokabeln=vokabeln,
+        selected_lektionen=selected_lektionen,
+        selected_uids=selected_uids,
+        difficulty_filter_enabled=difficulty_filter_enabled,
+        selected_difficulties=selected_difficulties,
+        difficulty_levels=difficulty_levels,
+    )
     if not targets:
         return []
 
@@ -541,8 +739,28 @@ def _select_words_by_blocks(vokabeln, selected_lektionen, selected_uids, block_s
     return words
 
 
-def _build_auto_audio_playlist(vokabeln, selected_lektionen, selected_uids, block_size, block_selection, repeats_per_word, total_rounds):
-    words = _select_words_by_blocks(vokabeln, selected_lektionen, selected_uids, block_size, block_selection)
+def _build_auto_audio_playlist(
+    vokabeln,
+    selected_lektionen,
+    selected_uids,
+    block_size,
+    block_selection,
+    repeats_per_word,
+    total_rounds,
+    difficulty_filter_enabled=False,
+    selected_difficulties=None,
+    difficulty_levels=None,
+):
+    words = _select_words_by_blocks(
+        vokabeln=vokabeln,
+        selected_lektionen=selected_lektionen,
+        selected_uids=selected_uids,
+        block_size=block_size,
+        block_selection=block_selection,
+        difficulty_filter_enabled=difficulty_filter_enabled,
+        selected_difficulties=selected_difficulties,
+        difficulty_levels=difficulty_levels,
+    )
     playlist = []
     playable_words = 0
     skipped_words = 0
@@ -616,10 +834,13 @@ def index():
     source_path = _resolve_source_from_id(prefs.get("source_id"))
     selected_source_id = _source_id_for_path(source_path)
     vokabeln = lade_vokabeln_full(source_path)
+    difficulty_levels = _difficulty_levels_for_vocab(vokabeln)
+    difficulty_counts = _difficulty_counts(vokabeln, difficulty_levels)
     lektionen = alle_lektionen(vokabeln)
     valid_uids = {_make_uid(v) for v in vokabeln}
     prefs["selected_lektionen"] = [l for l in prefs.get("selected_lektionen", []) if l in lektionen]
     prefs["selected_uids"] = [u for u in prefs.get("selected_uids", []) if u in valid_uids]
+    prefs["selected_difficulties"] = [d for d in prefs.get("selected_difficulties", []) if d in DIFFICULTY_LEVELS]
     prefs["source_id"] = selected_source_id
     status = request.args.get("status")
     message = request.args.get("message")
@@ -632,6 +853,7 @@ def index():
             "deutsch": v.get("deutsch", ""),
             "deklination": v.get("deklination", ""),
             "lektion": v.get("lektion", ""),
+            "difficulty": difficulty_levels.get(_make_uid(v), 3),
         }
         for v in vokabeln
     ]
@@ -648,6 +870,9 @@ def index():
         sources=_available_sources(),
         selected_source_id=selected_source_id,
         all_vocab=all_vocab,
+        difficulty_levels=DIFFICULTY_LEVELS,
+        difficulty_labels=DIFFICULTY_LABELS,
+        difficulty_counts=difficulty_counts,
     )
 
 
@@ -657,10 +882,13 @@ def learn_home():
     source_path = _resolve_source_from_id(prefs.get("source_id"))
     selected_source_id = _source_id_for_path(source_path)
     vokabeln = lade_vokabeln_full(source_path)
+    difficulty_levels = _difficulty_levels_for_vocab(vokabeln)
+    difficulty_counts = _difficulty_counts(vokabeln, difficulty_levels)
     lektionen = alle_lektionen(vokabeln)
     valid_uids = {_make_uid(v) for v in vokabeln}
     prefs["selected_lektionen"] = [l for l in prefs.get("selected_lektionen", []) if l in lektionen]
     prefs["selected_uids"] = [u for u in prefs.get("selected_uids", []) if u in valid_uids]
+    prefs["selected_difficulties"] = [d for d in prefs.get("selected_difficulties", []) if d in DIFFICULTY_LEVELS]
     prefs["source_id"] = selected_source_id
     status = request.args.get("status")
     message = request.args.get("message")
@@ -671,6 +899,7 @@ def learn_home():
             "deutsch": v.get("deutsch", ""),
             "deklination": v.get("deklination", ""),
             "lektion": v.get("lektion", ""),
+            "difficulty": difficulty_levels.get(_make_uid(v), 3),
         }
         for v in vokabeln
     ]
@@ -685,6 +914,9 @@ def learn_home():
         sources=_available_sources(),
         selected_source_id=selected_source_id,
         all_vocab=all_vocab,
+        difficulty_levels=DIFFICULTY_LEVELS,
+        difficulty_labels=DIFFICULTY_LABELS,
+        difficulty_counts=difficulty_counts,
     )
 
 
@@ -752,6 +984,7 @@ def delete_vocab():
         audio_deleted += _delete_audio_files_for_vocab(v)
 
     speichere_vokabeln_full(kept)
+    _remove_performance_history_for_uids([_make_uid(v) for v in to_delete])
     return redirect(
         url_for(
             "index",
@@ -779,6 +1012,7 @@ def delete_lesson():
         audio_deleted += _delete_audio_files_for_vocab(v)
 
     speichere_vokabeln_full(kept)
+    _remove_performance_history_for_uids([_make_uid(v) for v in to_delete])
     return redirect(
         url_for(
             "index",
@@ -1032,6 +1266,7 @@ def start():
     vokabeln = lade_vokabeln_full(source_path)
     if not vokabeln:
         return redirect(url_for(_home_endpoint(), status="error", message=f"Quelle ist leer: {source_path.name}"))
+    difficulty_levels = _difficulty_levels_for_vocab(vokabeln)
 
     mode = (request.form.get("mode") or prefs.get("mode") or "kartei").strip().lower()
     if mode not in ALLOWED_MODES:
@@ -1058,6 +1293,18 @@ def start():
     show_declension_inline = request.form.get("show_declension_inline") == "on"
     audio_enabled = request.form.get("audio_enabled") == "on"
     timer_enabled = request.form.get("timer_enabled") == "on"
+    difficulty_filter_enabled = request.form.get("difficulty_filter_enabled") == "on"
+    selected_difficulties = []
+    for raw in request.form.getlist("selected_difficulties"):
+        try:
+            lvl = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if lvl in DIFFICULTY_LEVELS:
+            selected_difficulties.append(lvl)
+    selected_difficulties = sorted(set(selected_difficulties))
+    if difficulty_filter_enabled and not selected_difficulties:
+        selected_difficulties = list(DIFFICULTY_LEVELS)
 
     session["learning_prefs"] = {
         "mode": mode,
@@ -1071,6 +1318,8 @@ def start():
         "with_declension_answer": with_declension_answer,
         "show_declension_inline": show_declension_inline,
         "audio_enabled": audio_enabled,
+        "difficulty_filter_enabled": difficulty_filter_enabled,
+        "selected_difficulties": selected_difficulties,
         "selected_lektionen": selected_lektionen,
         "selected_uids": selected_uids,
         "source_id": source_id,
@@ -1085,6 +1334,9 @@ def start():
             block_selection=block_selection,
             repeats_per_word=repeats_per_word,
             total_rounds=total_rounds,
+            difficulty_filter_enabled=difficulty_filter_enabled,
+            selected_difficulties=selected_difficulties,
+            difficulty_levels=difficulty_levels,
         )
         if not playlist:
             return redirect(
@@ -1113,6 +1365,9 @@ def start():
             block_size=block_size,
             block_selection=block_selection,
             repetitions=repetitions,
+            difficulty_filter_enabled=difficulty_filter_enabled,
+            selected_difficulties=selected_difficulties,
+            difficulty_levels=difficulty_levels,
         )
         if not queue:
             return redirect(
@@ -1130,7 +1385,18 @@ def start():
             show_declension_inline=show_declension_inline,
         )
 
-    queue = _build_queue(vokabeln, mode, selected_lektionen, selected_uids, block_size, block_selection, repetitions)
+    queue = _build_queue(
+        vokabeln=vokabeln,
+        mode=mode,
+        selected_lektionen=selected_lektionen,
+        selected_uids=selected_uids,
+        block_size=block_size,
+        block_selection=block_selection,
+        repetitions=repetitions,
+        difficulty_filter_enabled=difficulty_filter_enabled,
+        selected_difficulties=selected_difficulties,
+        difficulty_levels=difficulty_levels,
+    )
     if mode != "block":
         random.shuffle(queue)
 
@@ -1139,6 +1405,8 @@ def start():
         "source_id": source_id,
         "selected_lektionen": selected_lektionen,
         "selected_uids": selected_uids,
+        "difficulty_filter_enabled": difficulty_filter_enabled,
+        "selected_difficulties": selected_difficulties,
         "with_declension_answer": with_declension_answer,
         "show_declension_inline": show_declension_inline,
         "audio_enabled": audio_enabled,
@@ -1214,6 +1482,7 @@ def answer():
             master,
             with_declension_answer=bool(state.get("with_declension_answer", False)),
         )
+    _record_performance_result(uid, correct)
 
     if not correct:
         state.setdefault("wrong", []).append(
@@ -1289,6 +1558,7 @@ def mark_correct():
             v["falsch"] = max(0, _to_int(v.get("falsch", 0)) - 1)
             v["richtig"] = _to_int(v.get("richtig", 0)) + 1
             break
+    _replace_last_performance_result(uid, True)
 
     wrong = state.get("wrong", [])
     state["wrong"] = [w for w in wrong if w.get("question_idx") != question_idx]

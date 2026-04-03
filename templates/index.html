@@ -61,6 +61,20 @@
         </fieldset>
 
         <fieldset>
+          <legend>Schwierigkeit</legend>
+          <label><input type="checkbox" name="difficulty_filter_enabled" id="difficulty-filter-enabled" {% if prefs.difficulty_filter_enabled %}checked{% endif %}> Nach Schwierigkeit filtern</label>
+          <div class="lesson-grid">
+            {% for d in difficulty_levels %}
+              <label>
+                <input type="checkbox" class="difficulty-checkbox" name="selected_difficulties" value="{{ d }}" {% if d in prefs.selected_difficulties %}checked{% endif %}>
+                {{ difficulty_labels[d] }} ({{ difficulty_counts[d] }})
+              </label>
+            {% endfor %}
+          </div>
+          <p class="hint">Auswertung basiert auf den letzten Wiederholungen plus Gesamttrend.</p>
+        </fieldset>
+
+        <fieldset>
           <legend>Vokabeln gezielt auswaehlen (optional)</legend>
           <div class="actions">
             <button type="button" class="secondary" id="select-all-words">Alle auswaehlen</button>
@@ -69,8 +83,8 @@
           <div class="vocab-list">
             {% for v in all_vocab %}
               <label class="vocab-row">
-                <input type="checkbox" class="word-checkbox" name="selected_uids" value="{{ v.uid }}" data-lesson="{{ v.lektion }}" {% if v.uid in prefs.selected_uids %}checked{% endif %}>
-                <span>{{ v.fremdsprache }} -> {{ v.deutsch }}{% if v.deklination %} ({{ v.deklination }}){% endif %} [Lektion {{ v.lektion }}]</span>
+                <input type="checkbox" class="word-checkbox" name="selected_uids" value="{{ v.uid }}" data-lesson="{{ v.lektion }}" data-difficulty="{{ v.difficulty }}" {% if v.uid in prefs.selected_uids %}checked{% endif %}>
+                <span>{{ v.fremdsprache }} -> {{ v.deutsch }}{% if v.deklination %} ({{ v.deklination }}){% endif %} [Lektion {{ v.lektion }} | {{ difficulty_labels[v.difficulty] }}]</span>
               </label>
             {% endfor %}
           </div>
@@ -183,6 +197,8 @@
     const autoAudioSettings = document.getElementById('auto-audio-settings');
     const throughSettings = document.getElementById('through-settings');
     const wordCheckboxes = Array.from(document.querySelectorAll('.word-checkbox'));
+    const difficultyCheckboxes = Array.from(document.querySelectorAll('.difficulty-checkbox'));
+    const difficultyFilterEnabled = document.getElementById('difficulty-filter-enabled');
     const selectAllBtn = document.getElementById('select-all-words');
     const clearAllBtn = document.getElementById('clear-all-words');
     const blockPreview = document.getElementById('block-preview');
@@ -204,11 +220,20 @@
       return new Set(wordCheckboxes.filter(cb => cb.checked).map(cb => cb.value));
     }
 
+    function selectedDifficulties() {
+      return new Set(difficultyCheckboxes.filter(cb => cb.checked).map(cb => Number(cb.value)));
+    }
+
     function refreshBlockPreview() {
       if (!blockPreview) return;
       const lessons = selectedLessons();
       const chosenUids = selectedUids();
-      const filtered = allVocab.filter(v => lessons.has(v.lektion)).filter(v => chosenUids.size ? chosenUids.has(v.uid) : true);
+      const chosenDiff = selectedDifficulties();
+      const useDiff = difficultyFilterEnabled && difficultyFilterEnabled.checked;
+      const filtered = allVocab
+        .filter(v => lessons.has(v.lektion))
+        .filter(v => chosenUids.size ? chosenUids.has(v.uid) : true)
+        .filter(v => useDiff ? chosenDiff.has(v.difficulty) : true);
       const size = getBlockSize();
       if (!filtered.length) {
         blockPreview.textContent = 'Keine Vokabeln in der aktuellen Auswahl.';
@@ -257,6 +282,8 @@
     }
     document.querySelectorAll('input[name="lektionen"]').forEach(cb => cb.addEventListener('change', refreshBlockPreview));
     wordCheckboxes.forEach(cb => cb.addEventListener('change', refreshBlockPreview));
+    difficultyCheckboxes.forEach(cb => cb.addEventListener('change', refreshBlockPreview));
+    if (difficultyFilterEnabled) difficultyFilterEnabled.addEventListener('change', refreshBlockPreview);
     const blockSizeInput = document.querySelector('#block-settings input[name="block_size"]');
     if (blockSizeInput) blockSizeInput.addEventListener('input', refreshBlockPreview);
 
