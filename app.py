@@ -800,6 +800,73 @@ def _build_auto_audio_playlist(
     return playlist, playable_words, skipped_words, len(words)
 
 
+def _build_kartei_state(queue):
+    boxes = {}
+    wrong_counts = {}
+    round_queue = []
+    for item in queue:
+        uid = item.get("uid", "")
+        if not uid or uid in boxes:
+            continue
+        boxes[uid] = 1
+        wrong_counts[uid] = 0
+        round_queue.append(uid)
+    random.shuffle(round_queue)
+    return {
+        "boxes": boxes,
+        "wrong_counts": wrong_counts,
+        "round_queue": round_queue,
+        "round_index": 0,
+        "asked_total": 0,
+    }
+
+
+def _kartei_prepare_current_item(state):
+    kartei = state.get("kartei") or {}
+    boxes = {str(k): _to_int(v) for k, v in (kartei.get("boxes") or {}).items() if str(k).strip()}
+    if not boxes:
+        return None, None
+
+    if all(min(5, max(1, box)) >= 5 for box in boxes.values()):
+        return None, None
+
+    pool = state.get("queue", [])
+    pool_by_uid = {item.get("uid", ""): item for item in pool if item.get("uid")}
+    round_queue = [str(x) for x in (kartei.get("round_queue") or []) if str(x).strip() in boxes]
+    round_index = _to_int(kartei.get("round_index", 0))
+    if round_index < 0:
+        round_index = 0
+
+    if round_index >= len(round_queue):
+        round_queue = [uid for uid, box in boxes.items() if min(5, max(1, box)) < 5]
+        random.shuffle(round_queue)
+        round_index = 0
+
+    while round_index < len(round_queue) and round_queue[round_index] not in pool_by_uid:
+        round_index += 1
+
+    if round_index >= len(round_queue):
+        return None, None
+
+    uid = round_queue[round_index]
+    item = pool_by_uid[uid]
+    kartei["boxes"] = boxes
+    kartei["round_queue"] = round_queue
+    kartei["round_index"] = round_index
+    kartei["wrong_counts"] = {str(k): _to_int(v) for k, v in (kartei.get("wrong_counts") or {}).items() if str(k).strip()}
+    kartei["asked_total"] = _to_int(kartei.get("asked_total", 0))
+    state["kartei"] = kartei
+    info = {
+        "current_box": min(5, max(1, _to_int(boxes.get(uid, 1)))),
+        "open_words": sum(1 for box in boxes.values() if min(5, max(1, box)) < 5),
+        "mastered_words": sum(1 for box in boxes.values() if min(5, max(1, box)) >= 5),
+        "total_words": len(boxes),
+        "round_current": round_index + 1,
+        "round_total": len(round_queue),
+    }
+    return item, info
+
+
 @app.before_request
 def _protect_routes():
     endpoint = request.endpoint or ""
@@ -1399,8 +1466,16 @@ def start():
     )
     if mode != "block":
         random.shuffle(queue)
+    if not queue:
+        return redirect(
+            url_for(
+                _home_endpoint(),
+                status="error",
+                message="Keine Vokabeln fuer die Auswahl gefunden.",
+            )
+        )
 
-    session["state"] = {
+    state = {
         "mode": mode,
         "source_id": source_id,
         "selected_lektionen": selected_lektionen,
@@ -1415,6 +1490,9 @@ def start():
         "wrong": [],
         "last_feedback": None,
     }
+    if mode == "kartei":
+        state["kartei"] = _build_kartei_state(queue)
+    session["state"] = state
 
     return redirect(url_for("quiz"))
 
@@ -1425,15 +1503,26 @@ def quiz():
     if not state:
         return redirect(url_for(_home_endpoint()))
 
-    queue = state.get("queue", [])
-    idx = state.get("index", 0)
-
-    if idx >= len(queue):
-        return redirect(url_for("summary"))
-
-    item = queue[idx]
-    v = item["display"]
     mode = state.get("mode", "kartei")
+    if mode == "kartei":
+        item, kartei_info = _kartei_prepare_current_item(state)
+        session["state"] = state
+        if item is None:
+            return redirect(url_for("summary"))
+        idx = _to_int((state.get("kartei") or {}).get("round_index", 0))
+        current = kartei_info.get("round_current", idx + 1)
+        total = kartei_info.get("round_total", len((state.get("kartei") or {}).get("round_queue", [])))
+    else:
+        kartei_info = None
+        queue = state.get("queue", [])
+        idx = state.get("index", 0)
+        if idx >= len(queue):
+            return redirect(url_for("summary"))
+        item = queue[idx]
+        current = idx + 1
+        total = len(queue)
+
+    v = item["display"]
     audio_enabled = bool(state.get("audio_enabled", True))
     question_audio_url = None
     if audio_enabled:
@@ -1447,14 +1536,15 @@ def quiz():
     return render_template(
         "quiz.html",
         mode=mode,
-        current=idx + 1,
-        total=len(queue),
+        current=current,
+        total=total,
         vokabel=v,
         uid=item["uid"],
         question_audio_url=question_audio_url,
         audio_enabled=audio_enabled,
         show_declension_inline=bool(state.get("show_declension_inline", False)),
         answer_hint=answer_hint,
+        kartei_info=kartei_info,
     )
 
 
@@ -1468,7 +1558,7 @@ def answer():
     queue = state.get("queue", [])
     idx = state.get("index", 0)
 
-    if idx >= len(queue):
+    if mode != "kartei" and idx >= len(queue):
         return redirect(url_for("summary"))
 
     uid = request.form.get("uid", "")
@@ -1484,7 +1574,46 @@ def answer():
         )
     _record_performance_result(uid, correct)
 
-    if not correct:
+    current_display = None
+    if mode == "kartei":
+        kartei = state.get("kartei") or {}
+        boxes = {str(k): _to_int(v) for k, v in (kartei.get("boxes") or {}).items() if str(k).strip()}
+        wrong_counts = {str(k): _to_int(v) for k, v in (kartei.get("wrong_counts") or {}).items() if str(k).strip()}
+        round_queue = [str(x) for x in (kartei.get("round_queue") or []) if str(x).strip()]
+        round_index = _to_int(kartei.get("round_index", 0))
+        if uid not in boxes:
+            return redirect(url_for("quiz"))
+        prev_box = min(5, max(1, _to_int(boxes.get(uid, 1))))
+        pool_by_uid = {item.get("uid", ""): item for item in queue if item.get("uid")}
+        current_display = (pool_by_uid.get(uid) or {}).get("display", {})
+
+        if correct:
+            boxes[uid] = min(5, prev_box + 1)
+        else:
+            boxes[uid] = prev_box
+            wrong_counts[uid] = _to_int(wrong_counts.get(uid, 0)) + 1
+
+        question_idx = _to_int(kartei.get("asked_total", 0))
+        if not correct:
+            state.setdefault("wrong", []).append(
+                {
+                    "question_idx": question_idx,
+                    "frage": current_display.get("fremdsprache", ""),
+                    "expected": expected,
+                    "answer": user_answer,
+                }
+            )
+
+        kartei["boxes"] = boxes
+        kartei["wrong_counts"] = wrong_counts
+        if round_index < len(round_queue):
+            kartei["round_index"] = round_index + 1
+        else:
+            kartei["round_index"] = round_index
+        kartei["asked_total"] = question_idx + 1
+        state["kartei"] = kartei
+        state["index"] = kartei["asked_total"]
+    if mode != "kartei" and not correct:
         state.setdefault("wrong", []).append(
             {
                 "question_idx": idx,
@@ -1509,14 +1638,19 @@ def answer():
     state["last_feedback"] = {
         "uid": uid,
         "was_wrong": (not correct),
-        "question_idx": idx,
+        "question_idx": idx if mode != "kartei" else _to_int((state.get("kartei") or {}).get("asked_total", 1)) - 1,
+        "kartei_prev_box": (prev_box if mode == "kartei" else None),
     }
-    state["index"] = idx + 1
+    if mode != "kartei":
+        state["index"] = idx + 1
     session["state"] = state
 
     answer_audio_url = None
     if bool(state.get("audio_enabled", True)):
-        translation_text = queue[idx]["display"].get("deutsch", "")
+        if mode == "kartei":
+            translation_text = (current_display or {}).get("deutsch", "")
+        else:
+            translation_text = queue[idx]["display"].get("deutsch", "")
         answer_audio_rel = _cached_audio_rel_path(uid, "de", translation_text)
         answer_audio_url = url_for("static", filename=answer_audio_rel) if answer_audio_rel else None
 
@@ -1562,6 +1696,18 @@ def mark_correct():
 
     wrong = state.get("wrong", [])
     state["wrong"] = [w for w in wrong if w.get("question_idx") != question_idx]
+    if state.get("mode") == "kartei":
+        kartei = state.get("kartei") or {}
+        boxes = {str(k): _to_int(v) for k, v in (kartei.get("boxes") or {}).items() if str(k).strip()}
+        wrong_counts = {str(k): _to_int(v) for k, v in (kartei.get("wrong_counts") or {}).items() if str(k).strip()}
+        prev_box = min(5, max(1, _to_int(last_feedback.get("kartei_prev_box", boxes.get(uid, 1)))))
+        if uid in boxes:
+            boxes[uid] = min(5, max(_to_int(boxes.get(uid, 1)), prev_box + 1))
+        if uid in wrong_counts:
+            wrong_counts[uid] = max(0, _to_int(wrong_counts.get(uid, 0)) - 1)
+        kartei["boxes"] = boxes
+        kartei["wrong_counts"] = wrong_counts
+        state["kartei"] = kartei
     state["last_feedback"] = {"uid": uid, "was_wrong": False, "question_idx": question_idx}
     session["state"] = state
 
@@ -1574,17 +1720,43 @@ def summary():
     if not state:
         return redirect(url_for(_home_endpoint()))
 
+    mode = state.get("mode", "kartei")
     wrong = state.get("wrong", [])
     total = len(state.get("queue", []))
     wrong_count = len(wrong)
     correct_count = max(0, total - wrong_count)
+    kartei_wrong_by_word = []
+    if mode == "kartei":
+        kartei = state.get("kartei") or {}
+        boxes = {str(k): _to_int(v) for k, v in (kartei.get("boxes") or {}).items() if str(k).strip()}
+        wrong_counts = {str(k): _to_int(v) for k, v in (kartei.get("wrong_counts") or {}).items() if str(k).strip()}
+        total = len(boxes)
+        correct_count = sum(1 for box in boxes.values() if min(5, max(1, box)) >= 5)
+        wrong_count = sum(max(0, _to_int(v)) for v in wrong_counts.values())
+        pool_by_uid = {item.get("uid", ""): item.get("display", {}) for item in state.get("queue", []) if item.get("uid")}
+        entries = []
+        for uid, cnt in wrong_counts.items():
+            if cnt <= 0:
+                continue
+            display = pool_by_uid.get(uid, {})
+            entries.append(
+                {
+                    "fremdsprache": display.get("fremdsprache", uid),
+                    "deutsch": display.get("deutsch", ""),
+                    "count": cnt,
+                }
+            )
+        kartei_wrong_by_word = sorted(entries, key=lambda x: (-_to_int(x.get("count", 0)), x.get("fremdsprache", "").lower()))
 
     return render_template(
         "summary.html",
-        mode=state.get("mode", "kartei"),
+        mode=mode,
         total=total,
         correct_count=correct_count,
+        wrong_count=wrong_count,
         wrong=wrong,
+        is_kartei=(mode == "kartei"),
+        kartei_wrong_by_word=kartei_wrong_by_word,
     )
 
 

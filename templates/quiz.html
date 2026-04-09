@@ -15,6 +15,9 @@
 
     <div class="card">
       <p class="muted">{{ current }} / {{ total }} | Modus: {{ mode }}</p>
+      {% if kartei_info %}
+        <p class="muted">Kasten {{ kartei_info.current_box }} von 5 | Offen: {{ kartei_info.open_words }} | In Kasten 5: {{ kartei_info.mastered_words }} / {{ kartei_info.total_words }}</p>
+      {% endif %}
       <h2>
         {{ vokabel.fremdsprache }}
         {% if show_declension_inline and vokabel.deklination %}

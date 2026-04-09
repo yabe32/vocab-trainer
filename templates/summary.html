@@ -18,9 +18,20 @@
       <p><strong>Modus:</strong> {{ mode }}</p>
       <p><strong>Gesamt:</strong> {{ total }}</p>
       <p><strong>Richtig:</strong> {{ correct_count }}</p>
-      <p><strong>Falsch:</strong> {{ wrong|length }}</p>
+      <p><strong>Falsch:</strong> {{ wrong_count }}</p>
 
-      {% if wrong %}
+      {% if is_kartei %}
+        <h2>Fehler pro Wort</h2>
+        {% if kartei_wrong_by_word %}
+          <ul>
+            {% for item in kartei_wrong_by_word %}
+              <li>{{ item.fremdsprache }}{% if item.deutsch %} -> {{ item.deutsch }}{% endif %}: {{ item.count }} mal falsch</li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p>Keine falschen Antworten in diesem Durchgang.</p>
+        {% endif %}
+      {% elif wrong %}
         <h2>Falsch beantwortet</h2>
         <ul>
           {% for item in wrong %}
