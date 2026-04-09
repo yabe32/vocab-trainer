@@ -803,66 +803,95 @@ def _build_auto_audio_playlist(
 def _build_kartei_state(queue):
     boxes = {}
     wrong_counts = {}
-    round_queue = []
+    box_queue = []
     for item in queue:
         uid = item.get("uid", "")
         if not uid or uid in boxes:
             continue
         boxes[uid] = 1
         wrong_counts[uid] = 0
-        round_queue.append(uid)
-    random.shuffle(round_queue)
+        box_queue.append(uid)
     return {
         "boxes": boxes,
         "wrong_counts": wrong_counts,
-        "round_queue": round_queue,
-        "round_index": 0,
+        "current_box": 1,
+        "box_queue": box_queue,
+        "box_index": 0,
         "asked_total": 0,
     }
 
 
 def _kartei_prepare_current_item(state):
     kartei = state.get("kartei") or {}
-    boxes = {str(k): _to_int(v) for k, v in (kartei.get("boxes") or {}).items() if str(k).strip()}
+    boxes = {
+        str(k): min(6, max(1, _to_int(v)))
+        for k, v in (kartei.get("boxes") or {}).items()
+        if str(k).strip()
+    }
     if not boxes:
         return None, None
 
-    if all(min(5, max(1, box)) >= 5 for box in boxes.values()):
+    if all(box >= 6 for box in boxes.values()):
         return None, None
 
     pool = state.get("queue", [])
     pool_by_uid = {item.get("uid", ""): item for item in pool if item.get("uid")}
-    round_queue = [str(x) for x in (kartei.get("round_queue") or []) if str(x).strip() in boxes]
-    round_index = _to_int(kartei.get("round_index", 0))
-    if round_index < 0:
-        round_index = 0
+    wrong_counts = {uid: _to_int((kartei.get("wrong_counts") or {}).get(uid, 0)) for uid in boxes}
+    current_box = min(5, max(1, _to_int(kartei.get("current_box", 1))))
+    box_queue = [
+        str(x)
+        for x in (kartei.get("box_queue") or [])
+        if str(x).strip() in boxes and boxes.get(str(x).strip()) == current_box and str(x).strip() in pool_by_uid
+    ]
+    box_index = max(0, _to_int(kartei.get("box_index", 0)))
+    queue_exhausted = bool(box_queue) and box_index >= len(box_queue)
 
-    if round_index >= len(round_queue):
-        round_queue = [uid for uid, box in boxes.items() if min(5, max(1, box)) < 5]
-        random.shuffle(round_queue)
-        round_index = 0
+    ordered_uids = [item.get("uid", "") for item in pool if item.get("uid")]
 
-    while round_index < len(round_queue) and round_queue[round_index] not in pool_by_uid:
-        round_index += 1
+    def _queue_for_box(box_no):
+        return [uid for uid in ordered_uids if boxes.get(uid) == box_no]
 
-    if round_index >= len(round_queue):
-        return None, None
+    def _next_non_empty_box(after_box):
+        start = min(5, max(1, _to_int(after_box)))
+        for step in range(5):
+            b = ((start - 1 + step) % 5) + 1
+            if any(box == b for box in boxes.values()):
+                return b
+        return None
 
-    uid = round_queue[round_index]
+    if queue_exhausted:
+        box_queue = []
+
+    guard = 0
+    while not box_queue or box_index >= len(box_queue):
+        guard += 1
+        if guard > 6:
+            return None, None
+        start_box = (current_box % 5) + 1 if queue_exhausted else current_box
+        next_box = _next_non_empty_box(start_box)
+        if next_box is None:
+            return None, None
+        current_box = next_box
+        box_queue = _queue_for_box(current_box)
+        box_index = 0
+        queue_exhausted = False
+
+    uid = box_queue[box_index]
     item = pool_by_uid[uid]
     kartei["boxes"] = boxes
-    kartei["round_queue"] = round_queue
-    kartei["round_index"] = round_index
-    kartei["wrong_counts"] = {str(k): _to_int(v) for k, v in (kartei.get("wrong_counts") or {}).items() if str(k).strip()}
+    kartei["wrong_counts"] = wrong_counts
+    kartei["current_box"] = current_box
+    kartei["box_queue"] = box_queue
+    kartei["box_index"] = box_index
     kartei["asked_total"] = _to_int(kartei.get("asked_total", 0))
     state["kartei"] = kartei
     info = {
-        "current_box": min(5, max(1, _to_int(boxes.get(uid, 1)))),
-        "open_words": sum(1 for box in boxes.values() if min(5, max(1, box)) < 5),
-        "mastered_words": sum(1 for box in boxes.values() if min(5, max(1, box)) >= 5),
+        "current_box": current_box,
+        "open_words": sum(1 for box in boxes.values() if 1 <= box <= 5),
+        "mastered_words": sum(1 for box in boxes.values() if box >= 6),
         "total_words": len(boxes),
-        "round_current": round_index + 1,
-        "round_total": len(round_queue),
+        "round_current": box_index + 1,
+        "round_total": len(box_queue),
     }
     return item, info
 
@@ -1509,9 +1538,9 @@ def quiz():
         session["state"] = state
         if item is None:
             return redirect(url_for("summary"))
-        idx = _to_int((state.get("kartei") or {}).get("round_index", 0))
+        idx = _to_int((state.get("kartei") or {}).get("box_index", 0))
         current = kartei_info.get("round_current", idx + 1)
-        total = kartei_info.get("round_total", len((state.get("kartei") or {}).get("round_queue", [])))
+        total = kartei_info.get("round_total", len((state.get("kartei") or {}).get("box_queue", [])))
     else:
         kartei_info = None
         queue = state.get("queue", [])
@@ -1577,18 +1606,31 @@ def answer():
     current_display = None
     if mode == "kartei":
         kartei = state.get("kartei") or {}
-        boxes = {str(k): _to_int(v) for k, v in (kartei.get("boxes") or {}).items() if str(k).strip()}
+        boxes = {
+            str(k): min(6, max(1, _to_int(v)))
+            for k, v in (kartei.get("boxes") or {}).items()
+            if str(k).strip()
+        }
         wrong_counts = {str(k): _to_int(v) for k, v in (kartei.get("wrong_counts") or {}).items() if str(k).strip()}
-        round_queue = [str(x) for x in (kartei.get("round_queue") or []) if str(x).strip()]
-        round_index = _to_int(kartei.get("round_index", 0))
+        current_box = min(5, max(1, _to_int(kartei.get("current_box", 1))))
+        box_queue = [str(x) for x in (kartei.get("box_queue") or []) if str(x).strip()]
+        box_index = max(0, _to_int(kartei.get("box_index", 0)))
         if uid not in boxes:
             return redirect(url_for("quiz"))
-        prev_box = min(5, max(1, _to_int(boxes.get(uid, 1))))
+        if box_index >= len(box_queue):
+            return redirect(url_for("quiz"))
+        expected_uid = box_queue[box_index]
+        if uid != expected_uid:
+            uid = expected_uid
+        prev_box = min(6, max(1, _to_int(boxes.get(uid, 1))))
         pool_by_uid = {item.get("uid", ""): item for item in queue if item.get("uid")}
         current_display = (pool_by_uid.get(uid) or {}).get("display", {})
 
         if correct:
-            boxes[uid] = min(5, prev_box + 1)
+            if prev_box >= 5:
+                boxes[uid] = 6
+            else:
+                boxes[uid] = min(5, prev_box + 1)
         else:
             boxes[uid] = prev_box
             wrong_counts[uid] = _to_int(wrong_counts.get(uid, 0)) + 1
@@ -1606,10 +1648,9 @@ def answer():
 
         kartei["boxes"] = boxes
         kartei["wrong_counts"] = wrong_counts
-        if round_index < len(round_queue):
-            kartei["round_index"] = round_index + 1
-        else:
-            kartei["round_index"] = round_index
+        kartei["current_box"] = current_box
+        kartei["box_queue"] = box_queue
+        kartei["box_index"] = box_index + 1
         kartei["asked_total"] = question_idx + 1
         state["kartei"] = kartei
         state["index"] = kartei["asked_total"]
@@ -1639,7 +1680,7 @@ def answer():
         "uid": uid,
         "was_wrong": (not correct),
         "question_idx": idx if mode != "kartei" else _to_int((state.get("kartei") or {}).get("asked_total", 1)) - 1,
-        "kartei_prev_box": (prev_box if mode == "kartei" else None),
+        "kartei_prev_box": (min(5, prev_box) if mode == "kartei" else None),
     }
     if mode != "kartei":
         state["index"] = idx + 1
@@ -1698,11 +1739,15 @@ def mark_correct():
     state["wrong"] = [w for w in wrong if w.get("question_idx") != question_idx]
     if state.get("mode") == "kartei":
         kartei = state.get("kartei") or {}
-        boxes = {str(k): _to_int(v) for k, v in (kartei.get("boxes") or {}).items() if str(k).strip()}
+        boxes = {
+            str(k): min(6, max(1, _to_int(v)))
+            for k, v in (kartei.get("boxes") or {}).items()
+            if str(k).strip()
+        }
         wrong_counts = {str(k): _to_int(v) for k, v in (kartei.get("wrong_counts") or {}).items() if str(k).strip()}
         prev_box = min(5, max(1, _to_int(last_feedback.get("kartei_prev_box", boxes.get(uid, 1)))))
         if uid in boxes:
-            boxes[uid] = min(5, max(_to_int(boxes.get(uid, 1)), prev_box + 1))
+            boxes[uid] = 6 if prev_box >= 5 else min(5, prev_box + 1)
         if uid in wrong_counts:
             wrong_counts[uid] = max(0, _to_int(wrong_counts.get(uid, 0)) - 1)
         kartei["boxes"] = boxes
@@ -1728,10 +1773,14 @@ def summary():
     kartei_wrong_by_word = []
     if mode == "kartei":
         kartei = state.get("kartei") or {}
-        boxes = {str(k): _to_int(v) for k, v in (kartei.get("boxes") or {}).items() if str(k).strip()}
+        boxes = {
+            str(k): min(6, max(1, _to_int(v)))
+            for k, v in (kartei.get("boxes") or {}).items()
+            if str(k).strip()
+        }
         wrong_counts = {str(k): _to_int(v) for k, v in (kartei.get("wrong_counts") or {}).items() if str(k).strip()}
         total = len(boxes)
-        correct_count = sum(1 for box in boxes.values() if min(5, max(1, box)) >= 5)
+        correct_count = sum(1 for box in boxes.values() if box >= 6)
         wrong_count = sum(max(0, _to_int(v)) for v in wrong_counts.values())
         pool_by_uid = {item.get("uid", ""): item.get("display", {}) for item in state.get("queue", []) if item.get("uid")}
         entries = []
