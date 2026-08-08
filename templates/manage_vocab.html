@@ -8,70 +8,142 @@
 </head>
 <body>
   <main class="container">
-    <div class="card grid">
-      <h1>Vokabelliste</h1>
-      <p class="muted">Gesamt: {{ total }}</p>
-      <form action="{{ url_for('manage_vocab') }}" method="get" class="grid">
-        <label>Quelle
-          <select name="source_id" onchange="this.form.submit()">
-            {% for s in sources %}
-              <option value="{{ s.id }}" {% if source_id == s.id %}selected{% endif %}>{{ s.label }}</option>
+    {% if import_draft %}
+      <div class="card grid">
+        <h1>Bildimport pruefen</h1>
+        <p class="muted">KI-Vorschlag vor dem Speichern in die CSV manuell kontrollieren.</p>
+        <p class="hint">Bilder: {{ import_draft.images | join(', ') }}</p>
+        {% if import_draft.image_urls %}
+          <div class="import-images">
+            {% for image in import_draft.image_urls %}
+              <figure>
+                <img src="{{ image.url }}" alt="{{ image.name }}">
+                <figcaption>{{ image.name }}</figcaption>
+              </figure>
             {% endfor %}
-          </select>
-        </label>
-      </form>
-      <a class="button secondary" href="{{ url_for('index') if can_edit else url_for('learn_home') }}">Zurueck</a>
-      {% if not can_edit %}
-        <p class="hint">Read-only Ansicht. Loeschen ist nur im Admin-Modus in der Standard-Quelle moeglich.</p>
-      {% endif %}
-    </div>
+          </div>
+        {% endif %}
+        {% if import_draft.warnings %}
+          <div class="card import-warning">
+            {% for warning in import_draft.warnings %}
+              <p>{{ warning }}</p>
+            {% endfor %}
+          </div>
+        {% endif %}
+      </div>
 
-    {% for lektion in lessons %}
-      <div class="card">
-        <div class="actions">
-          <h2>Lektion {{ lektion }}</h2>
-          {% if can_edit %}
-            <form action="{{ url_for('delete_lesson') }}" method="post" onsubmit="return confirm('Lektion {{ lektion }} wirklich loeschen?');">
-              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-              <input type="hidden" name="lektion" value="{{ lektion }}">
-              <button type="submit" class="danger">Ganze Lektion loeschen</button>
-            </form>
-          {% endif %}
-        </div>
-        <table class="audio-table">
+      <form action="{{ url_for('confirm_import') }}" method="post" class="card grid import-review-form">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="import_token" value="{{ import_token }}">
+        <table class="import-table">
           <thead>
             <tr>
+              <th>Import</th>
               <th>Fremdsprache</th>
               <th>Deutsch</th>
               <th>Deklination</th>
-              {% if can_edit %}<th>Aktion</th>{% endif %}
+              <th>Lektion</th>
             </tr>
           </thead>
           <tbody>
-            {% for v in grouped[lektion] %}
+            {% for row in import_draft.rows %}
               <tr>
-                <td>{{ v.fremdsprache }}</td>
-                <td>{{ v.deutsch }}</td>
-                <td>{{ v.deklination }}</td>
-                {% if can_edit %}
-                  <td>
-                    <form action="{{ url_for('delete_vocab') }}" method="post" onsubmit="return confirm('Dieses Wort wirklich loeschen?');">
-                      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                      <input type="hidden" name="uid" value="{{ v.fremdsprache }}|{{ v.deutsch }}|{{ v.lektion }}">
-                      <button type="submit" class="danger">Wort loeschen</button>
-                    </form>
-                  </td>
-                {% endif %}
+                <td>
+                  <input type="checkbox" name="rows[{{ loop.index0 }}][selected]" {% if row.selected %}checked{% endif %}>
+                </td>
+                <td><input type="text" name="rows[{{ loop.index0 }}][fremdsprache]" value="{{ row.fremdsprache }}"></td>
+                <td><input type="text" name="rows[{{ loop.index0 }}][deutsch]" value="{{ row.deutsch }}"></td>
+                <td><input type="text" name="rows[{{ loop.index0 }}][deklination]" value="{{ row.deklination }}"></td>
+                <td><input type="text" name="rows[{{ loop.index0 }}][lektion]" value="{{ row.lektion }}"></td>
               </tr>
             {% endfor %}
           </tbody>
         </table>
-      </div>
+        <div class="actions">
+          <a class="button secondary" href="{{ url_for('index') }}">Abbrechen</a>
+          <button type="submit">In CSV uebernehmen</button>
+        </div>
+      </form>
     {% else %}
-      <div class="card">
-        <p>Keine Vokabeln vorhanden.</p>
+      <div class="card grid">
+        <h1>Vokabelliste</h1>
+        <p class="muted">Gesamt: {{ total }}</p>
+        <form action="{{ url_for('manage_vocab') }}" method="get" class="grid">
+          <label>Quelle
+            <select name="source_id" onchange="this.form.submit()">
+              {% for s in sources %}
+                <option value="{{ s.id }}" {% if source_id == s.id %}selected{% endif %}>{{ s.label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </form>
+        <a class="button secondary" href="{{ url_for('index') if can_edit else url_for('learn_home') }}">Zurueck</a>
+        {% if not can_edit %}
+          <p class="hint">Read-only Ansicht. Loeschen ist nur im Admin-Modus in der Standard-Quelle moeglich.</p>
+        {% endif %}
       </div>
-    {% endfor %}
+
+      {% if can_edit and source_id == '__default__' %}
+        <div class="card grid">
+          <h2>Bildimport</h2>
+          <p class="hint">Buchseitenbilder hochladen, KI-Vorschlag pruefen, dann erst speichern.</p>
+          <form action="{{ url_for('import_images') }}" method="post" enctype="multipart/form-data" class="grid">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <label>Bilder auswaehlen
+              <input type="file" name="image_files" accept="image/png,image/jpeg,image/webp,image/bmp" multiple required>
+            </label>
+            <button type="submit">Bilder analysieren</button>
+          </form>
+        </div>
+      {% endif %}
+
+      {% for lektion in lessons %}
+        <div class="card">
+          <div class="actions">
+            <h2>Lektion {{ lektion }}</h2>
+            {% if can_edit %}
+              <form action="{{ url_for('delete_lesson') }}" method="post" onsubmit="return confirm('Lektion {{ lektion }} wirklich loeschen?');">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="lektion" value="{{ lektion }}">
+                <button type="submit" class="danger">Ganze Lektion loeschen</button>
+              </form>
+            {% endif %}
+          </div>
+          <table class="audio-table">
+            <thead>
+              <tr>
+                <th>Fremdsprache</th>
+                <th>Deutsch</th>
+                <th>Deklination</th>
+                {% if can_edit %}<th>Aktion</th>{% endif %}
+              </tr>
+            </thead>
+            <tbody>
+              {% for v in grouped[lektion] %}
+                <tr>
+                  <td>{{ v.fremdsprache }}</td>
+                  <td>{{ v.deutsch }}</td>
+                  <td>{{ v.deklination }}</td>
+                  {% if can_edit %}
+                    <td>
+                      <form action="{{ url_for('delete_vocab') }}" method="post" onsubmit="return confirm('Dieses Wort wirklich loeschen?');">
+                        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="uid" value="{{ v.fremdsprache }}|{{ v.deutsch }}|{{ v.lektion }}">
+                        <button type="submit" class="danger">Wort loeschen</button>
+                      </form>
+                    </td>
+                  {% endif %}
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="card">
+          <p>Keine Vokabeln vorhanden.</p>
+        </div>
+      {% endfor %}
+    {% endif %}
   </main>
 </body>
 </html>

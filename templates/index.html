@@ -67,7 +67,7 @@
             {% for d in difficulty_levels %}
               <label>
                 <input type="checkbox" class="difficulty-checkbox" name="selected_difficulties" value="{{ d }}" {% if d in prefs.selected_difficulties %}checked{% endif %}>
-                {{ difficulty_labels[d] }} ({{ difficulty_counts[d] }})
+                <span class="difficulty-label" data-difficulty="{{ d }}" data-label="{{ difficulty_labels[d] }}">{{ difficulty_labels[d] }} ({{ difficulty_counts[d] }})</span>
               </label>
             {% endfor %}
           </div>
@@ -158,9 +158,9 @@
 
     <form action="{{ url_for('set_api_key') }}" method="post" class="card grid">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-      <h2>OpenAI API Key</h2>
+      <h2>Synterolink API Key</h2>
       <label>API Key (serverseitig gespeichert)
-        <input type="password" name="openai_api_key" placeholder="sk-..." autocomplete="off">
+        <input type="password" name="synterolink_api_key" placeholder="sk-..." autocomplete="off">
       </label>
       <button type="submit">Key speichern</button>
       {% if has_runtime_key %}
@@ -224,6 +224,21 @@
       return new Set(difficultyCheckboxes.filter(cb => cb.checked).map(cb => Number(cb.value)));
     }
 
+    function updateDifficultyCounts() {
+      const lessons = selectedLessons();
+      const chosenUids = selectedUids();
+      const filtered = allVocab
+        .filter(v => lessons.has(v.lektion))
+        .filter(v => chosenUids.size ? chosenUids.has(v.uid) : true);
+      const counts = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0};
+      filtered.forEach(v => { counts[v.difficulty] = (counts[v.difficulty] || 0) + 1; });
+      document.querySelectorAll('.difficulty-label').forEach(el => {
+        const lvl = Number(el.getAttribute('data-difficulty'));
+        const label = el.getAttribute('data-label') || '';
+        el.textContent = `${label} (${counts[lvl] || 0})`;
+      });
+    }
+
     function refreshBlockPreview() {
       if (!blockPreview) return;
       const lessons = selectedLessons();
@@ -254,6 +269,7 @@
       if (throughSettings) throughSettings.classList.toggle('hidden', !throughActive);
       if (autoAudioSettings) autoAudioSettings.classList.toggle('hidden', !autoActive);
       refreshBlockPreview();
+      updateDifficultyCounts();
     }
 
     function createRow() {
@@ -286,6 +302,7 @@
     if (difficultyFilterEnabled) difficultyFilterEnabled.addEventListener('change', refreshBlockPreview);
     const blockSizeInput = document.querySelector('#block-settings input[name="block_size"]');
     if (blockSizeInput) blockSizeInput.addEventListener('input', refreshBlockPreview);
+    document.querySelectorAll('input[name="lektionen"], .word-checkbox').forEach(cb => cb.addEventListener('change', updateDifficultyCounts));
 
     if (selectAllBtn) selectAllBtn.addEventListener('click', () => { wordCheckboxes.forEach(cb => cb.checked = true); refreshBlockPreview(); });
     if (clearAllBtn) clearAllBtn.addEventListener('click', () => { wordCheckboxes.forEach(cb => cb.checked = false); refreshBlockPreview(); });
@@ -293,6 +310,7 @@
     if (addRowBtn) addRowBtn.addEventListener('click', createRow);
     createRow();
     refreshBlockPreview();
+    updateDifficultyCounts();
   </script>
 </body>
 </html>

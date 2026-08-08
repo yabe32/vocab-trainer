@@ -120,6 +120,58 @@ button.danger {
   max-width: 100%;
 }
 
+.import-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.import-table th,
+.import-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 0.45rem 0.3rem;
+  vertical-align: top;
+}
+
+.import-table input[type="text"] {
+  min-width: 120px;
+}
+
+.import-review-form {
+  overflow-x: auto;
+}
+
+.import-warning {
+  border: 1px solid #fbbf24;
+  background: #fffbeb;
+}
+
+.import-images {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
+
+.import-images figure {
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.5rem;
+  background: #fff;
+}
+
+.import-images img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 8px;
+}
+
+.import-images figcaption {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-top: 0.35rem;
+}
+
 fieldset {
   border: 1px solid var(--border);
   border-radius: 10px;

@@ -1,5 +1,6 @@
 import contextlib
 import csv
+import base64
 import hashlib
 import io
 import json
@@ -15,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, redirect, render_template, request, send_file, session, url_for
+from werkzeug.utils import secure_filename
 
 try:
     from openai import OpenAI
@@ -39,8 +41,10 @@ TTS_LOCK = threading.Lock()
 FIELDNAMES = ["fremdsprache", "deutsch", "deklination", "lektion", "richtig", "falsch"]
 DEFAULT_SOURCE_ID = "__default__"
 ALLOWED_MODES = {"kartei", "block", "auto_audio", "durchlauf"}
-TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
-TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "alloy")
+API_BASE_URL = os.getenv("SYNTEROLINK_API_BASE_URL", "https://api.synterolink.com/v1").rstrip("/")
+API_MODEL = os.getenv("SYNTEROLINK_MODEL", "gpt5.4-mini")
+TTS_MODEL = os.getenv("SYNTEROLINK_TTS_MODEL", "gpt-4o-mini-tts")
+TTS_VOICE = os.getenv("SYNTEROLINK_TTS_VOICE", "alloy")
 TTS_DELAY_SECONDS = float(os.getenv("TTS_DELAY_SECONDS", "0.8"))
 TTS_MAX_NEW_PER_RUN = int(os.getenv("TTS_MAX_NEW_PER_RUN", "0"))
 _OPENAI_CLIENT = None
@@ -66,7 +70,15 @@ ADMIN_ONLY_ENDPOINTS = {
     "export_csv",
     "export_audio_zip",
     "import_csv",
+    "import_images",
+    "import_image_file",
+    "review_import",
+    "confirm_import",
 }
+
+IMAGE_IMPORTS_DIR = BASE_DIR / "data" / "image_imports"
+IMAGE_IMPORTS_DIR.mkdir(parents=True, exist_ok=True)
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
 
 def _resolve_vokabel_datei():
@@ -95,6 +107,197 @@ def _sanitize_import_name(name):
     stem = Path(name or "import").stem
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-")
     return cleaned or "import"
+
+
+def _new_import_token():
+    return secrets.token_urlsafe(16)
+
+
+def _import_draft_dir(token):
+    safe_token = re.sub(r"[^A-Za-z0-9_-]", "", token or "")
+    return (IMAGE_IMPORTS_DIR / safe_token).resolve()
+
+
+def _is_valid_import_draft_dir(path):
+    return _is_path_within(IMAGE_IMPORTS_DIR, path)
+
+
+def _load_import_draft(token):
+    draft_dir = _import_draft_dir(token)
+    meta_file = draft_dir / "draft.json"
+    if not _is_valid_import_draft_dir(draft_dir) or not meta_file.exists():
+        return None
+    try:
+        data = json.loads(meta_file.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    data["token"] = token
+    return data
+
+
+def _save_import_draft(token, data):
+    draft_dir = _import_draft_dir(token)
+    draft_dir.mkdir(parents=True, exist_ok=True)
+    payload = dict(data or {})
+    payload["token"] = token
+    (draft_dir / "draft.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _delete_import_draft(token):
+    draft_dir = _import_draft_dir(token)
+    if _is_valid_import_draft_dir(draft_dir) and draft_dir.exists():
+        shutil.rmtree(draft_dir, ignore_errors=True)
+
+
+def _import_image_path(token, filename):
+    draft_dir = _import_draft_dir(token)
+    candidate = (draft_dir / (filename or "")).resolve()
+    if not _is_valid_import_draft_dir(draft_dir) or not _is_path_within(draft_dir, candidate):
+        return None
+    if candidate.suffix.lower() not in IMAGE_EXTENSIONS:
+        return None
+    if not candidate.exists():
+        return None
+    return candidate
+
+
+def _allowed_image_upload(filename):
+    return Path(filename or "").suffix.lower() in IMAGE_EXTENSIONS
+
+
+def _encode_image_for_ocr(image_path):
+    mime_map = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".bmp": "image/bmp",
+    }
+    suffix = image_path.suffix.lower()
+    mime = mime_map.get(suffix)
+    if not mime:
+        return None
+    raw = image_path.read_bytes()
+    return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
+
+
+def _format_image_input(image_path):
+    image_url = _encode_image_for_ocr(image_path)
+    if not image_url:
+        return None
+    return {"type": "input_image", "image_url": image_url}
+
+
+def _clean_import_row(row):
+    if not isinstance(row, dict):
+        return None
+    fremd = str(row.get("fremdsprache", "") or "").strip()
+    deutsch = str(row.get("deutsch", "") or "").strip()
+    deklination = str(row.get("deklination", "") or "").strip()
+    lektion = str(row.get("lektion", "") or "").strip()
+    if not fremd and not deutsch and not deklination and not lektion:
+        return None
+    return {
+        "fremdsprache": fremd,
+        "deutsch": deutsch,
+        "deklination": deklination,
+        "lektion": lektion,
+    }
+
+
+def _parse_import_rows_from_ai(raw_text):
+    text = (raw_text or "").strip()
+    if not text:
+        return [], []
+    json_text = text
+    if "```" in json_text:
+        json_text = re.sub(r"^```(?:json)?\s*", "", json_text.strip(), flags=re.IGNORECASE)
+        json_text = re.sub(r"\s*```$", "", json_text.strip())
+    try:
+        payload = json.loads(json_text)
+    except Exception:
+        match = re.search(r"\[[\s\S]*\]", text)
+        if not match:
+            return [], ["KI-Antwort konnte nicht als JSON gelesen werden."]
+        try:
+            payload = json.loads(match.group(0))
+        except Exception:
+            return [], ["KI-Antwort konnte nicht als JSON gelesen werden."]
+
+    if isinstance(payload, dict):
+        rows = payload.get("rows") or payload.get("vokabeln") or payload.get("items") or []
+    elif isinstance(payload, list):
+        rows = payload
+    else:
+        rows = []
+
+    cleaned = []
+    warnings = []
+    for row in rows:
+        item = _clean_import_row(row)
+        if not item:
+            continue
+        cleaned.append(item)
+
+    if not cleaned:
+        warnings.append("Keine verwertbaren Vokabeln in der KI-Antwort gefunden.")
+    return cleaned, warnings
+
+
+def _ai_extract_vocab_from_images(image_paths):
+    client = _get_openai_client()
+    if client is None:
+        return None, ["SYNTEROLINK_API_KEY fehlt oder der Client ist nicht verfuegbar."]
+
+    parts = []
+    for image_path in image_paths:
+        image_part = _format_image_input(image_path)
+        if image_part:
+            parts.append(image_part)
+
+    if not parts:
+        return None, ["Keine gueltigen Bilddateien gefunden."]
+
+    try:
+        response = client.responses.create(
+            model=API_MODEL,
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "Du extrahierst Vokabeln aus abfotografierten Buchseiten. "
+                                "Gib nur JSON zurueck, ohne Erklaerung, ohne Markdown. "
+                                "Format: {\"rows\":[{\"fremdsprache\":\"...\",\"deutsch\":\"...\",\"deklination\":\"...\",\"lektion\":\"...\"}]}. "
+                                "Leere oder fehlende Felder sind als leerer String anzugeben. "
+                                "Die Reihenfolge soll der Reihenfolge auf der Seite folgen. "
+                                "Wenn nur die Fremdsprache und die deutsche Bedeutung vorhanden sind, bleiben deklination und lektion leer."
+                            ),
+                        },
+                        *parts,
+                    ],
+                }
+            ]
+        )
+    except Exception as exc:
+        return None, [f"KI-Extraktion fehlgeschlagen: {exc}"]
+
+    raw_text = getattr(response, "output_text", "") or ""
+    if not raw_text and getattr(response, "output", None):
+        parts_text = []
+        for item in response.output:
+            for block in getattr(item, "content", []) or []:
+                text = getattr(block, "text", None)
+                if text:
+                    parts_text.append(text)
+        raw_text = "\n".join(parts_text)
+
+    rows, warnings = _parse_import_rows_from_ai(raw_text)
+    return rows, warnings
 
 
 def _is_path_within(parent, child):
@@ -154,7 +357,7 @@ def _available_sources():
 
 def _load_learning_prefs():
     defaults = {
-        "mode": "kartei",
+        "mode": "block",
         "block_size": 5,
         "repetitions": 1,
         "block_selection": "alle",
@@ -162,7 +365,7 @@ def _load_learning_prefs():
         "timer_seconds": 1,
         "repeats_per_word": 5,
         "total_rounds": 3,
-        "with_declension_answer": False,
+        "with_declension_answer": True,
         "show_declension_inline": False,
         "audio_enabled": True,
         "difficulty_filter_enabled": False,
@@ -335,6 +538,36 @@ def _difficulty_counts(vokabeln, levels):
     return counts
 
 
+def _selected_vocab(vokabeln, selected_lektionen, selected_uids):
+    lesson_set = {str(x) for x in (selected_lektionen or []) if str(x).strip()}
+    uid_set = {str(x) for x in (selected_uids or []) if str(x).strip()}
+    targets = [v for v in vokabeln if (v.get("lektion") or "") in lesson_set]
+    if uid_set:
+        targets = [v for v in targets if _make_uid(v) in uid_set]
+    return targets
+
+
+def _difficulty_counts_for_selection(vokabeln, levels, selected_lektionen, selected_uids):
+    counts = {lvl: 0 for lvl in DIFFICULTY_LEVELS}
+    for v in _selected_vocab(vokabeln, selected_lektionen, selected_uids):
+        lvl = levels.get(_make_uid(v), 3)
+        counts[lvl] = counts.get(lvl, 0) + 1
+    return counts
+
+
+def _queue_for_box(boxes, pool, box_no):
+    order = []
+    seen = set()
+    for item in pool:
+        uid = item.get("uid", "")
+        if not uid or uid in seen:
+            continue
+        if boxes.get(uid) == box_no:
+            order.append(uid)
+            seen.add(uid)
+    return order
+
+
 def _expected_answer(v, with_declension_answer=False):
     deutsch = (v.get("deutsch") or "").strip()
     deklination = (v.get("deklination") or "").strip()
@@ -361,10 +594,10 @@ def _save_runtime_secrets(data):
 
 
 def _get_effective_openai_api_key():
-    runtime_key = _load_runtime_secrets().get("OPENAI_API_KEY", "").strip()
+    runtime_key = _load_runtime_secrets().get("SYNTEROLINK_API_KEY", "").strip()
     if runtime_key:
         return runtime_key
-    return os.getenv("OPENAI_API_KEY", "").strip()
+    return os.getenv("SYNTEROLINK_API_KEY", "").strip()
 
 
 def _get_openai_client():
@@ -378,7 +611,7 @@ def _get_openai_client():
     if not api_key:
         return None
 
-    _OPENAI_CLIENT = OpenAI(api_key=api_key)
+    _OPENAI_CLIENT = OpenAI(api_key=api_key, base_url=API_BASE_URL)
     return _OPENAI_CLIENT
 
 
@@ -632,9 +865,10 @@ def _filter_targets(
     selected_difficulties=None,
     difficulty_levels=None,
 ):
-    targets = [v for v in vokabeln if v.get("lektion") in selected_lektionen]
-    if selected_uids:
-        selected_uids_set = set(selected_uids)
+    lesson_set = {str(x) for x in (selected_lektionen or []) if str(x).strip()}
+    selected_uids_set = {str(x) for x in (selected_uids or []) if str(x).strip()}
+    targets = [v for v in vokabeln if (v.get("lektion") or "") in lesson_set]
+    if selected_uids_set:
         targets = [v for v in targets if _make_uid(v) in selected_uids_set]
     if difficulty_filter_enabled:
         selected_difficulties = set(selected_difficulties or DIFFICULTY_LEVELS)
@@ -664,10 +898,10 @@ def _build_queue(
         difficulty_levels=difficulty_levels,
     )
 
-    if mode == "block":
-        if not targets:
-            return []
+    if not targets:
+        return []
 
+    if mode == "block":
         blocks = [targets[i : i + block_size] for i in range(0, len(targets), block_size)]
 
         if block_selection == "alle":
@@ -804,10 +1038,12 @@ def _build_kartei_state(queue):
     boxes = {}
     wrong_counts = {}
     box_queue = []
+    seen = set()
     for item in queue:
         uid = item.get("uid", "")
-        if not uid or uid in boxes:
+        if not uid or uid in seen:
             continue
+        seen.add(uid)
         boxes[uid] = 1
         wrong_counts[uid] = 0
         box_queue.append(uid)
@@ -819,6 +1055,19 @@ def _build_kartei_state(queue):
         "box_index": 0,
         "asked_total": 0,
     }
+
+
+def _next_box_queue(boxes, start_box=1):
+    start = min(5, max(1, _to_int(start_box)))
+    for box_no in range(start, 6):
+        queue = [uid for uid, box in boxes.items() if box == box_no]
+        if queue:
+            return box_no, queue
+    for box_no in range(1, start):
+        queue = [uid for uid, box in boxes.items() if box == box_no]
+        if queue:
+            return box_no, queue
+    return None, []
 
 
 def _kartei_prepare_current_item(state):
@@ -838,43 +1087,14 @@ def _kartei_prepare_current_item(state):
     pool_by_uid = {item.get("uid", ""): item for item in pool if item.get("uid")}
     wrong_counts = {uid: _to_int((kartei.get("wrong_counts") or {}).get(uid, 0)) for uid in boxes}
     current_box = min(5, max(1, _to_int(kartei.get("current_box", 1))))
-    box_queue = [
-        str(x)
-        for x in (kartei.get("box_queue") or [])
-        if str(x).strip() in boxes and boxes.get(str(x).strip()) == current_box and str(x).strip() in pool_by_uid
-    ]
     box_index = max(0, _to_int(kartei.get("box_index", 0)))
-    queue_exhausted = bool(box_queue) and box_index >= len(box_queue)
 
-    ordered_uids = [item.get("uid", "") for item in pool if item.get("uid")]
-
-    def _queue_for_box(box_no):
-        return [uid for uid in ordered_uids if boxes.get(uid) == box_no]
-
-    def _next_non_empty_box(after_box):
-        start = min(5, max(1, _to_int(after_box)))
-        for step in range(5):
-            b = ((start - 1 + step) % 5) + 1
-            if any(box == b for box in boxes.values()):
-                return b
-        return None
-
-    if queue_exhausted:
-        box_queue = []
-
-    guard = 0
-    while not box_queue or box_index >= len(box_queue):
-        guard += 1
-        if guard > 6:
-            return None, None
-        start_box = (current_box % 5) + 1 if queue_exhausted else current_box
-        next_box = _next_non_empty_box(start_box)
-        if next_box is None:
-            return None, None
-        current_box = next_box
-        box_queue = _queue_for_box(current_box)
+    box_queue = [str(x) for x in (kartei.get("box_queue") or []) if str(x).strip() in boxes and str(x).strip() in pool_by_uid]
+    if not box_queue or box_index >= len(box_queue):
+        current_box, box_queue = _next_box_queue(boxes, current_box)
         box_index = 0
-        queue_exhausted = False
+        if not box_queue:
+            return None, None
 
     uid = box_queue[box_index]
     item = pool_by_uid[uid]
@@ -931,16 +1151,21 @@ def index():
     selected_source_id = _source_id_for_path(source_path)
     vokabeln = lade_vokabeln_full(source_path)
     difficulty_levels = _difficulty_levels_for_vocab(vokabeln)
-    difficulty_counts = _difficulty_counts(vokabeln, difficulty_levels)
     lektionen = alle_lektionen(vokabeln)
     valid_uids = {_make_uid(v) for v in vokabeln}
     prefs["selected_lektionen"] = [l for l in prefs.get("selected_lektionen", []) if l in lektionen]
     prefs["selected_uids"] = [u for u in prefs.get("selected_uids", []) if u in valid_uids]
     prefs["selected_difficulties"] = [d for d in prefs.get("selected_difficulties", []) if d in DIFFICULTY_LEVELS]
     prefs["source_id"] = selected_source_id
+    difficulty_counts = _difficulty_counts_for_selection(
+        vokabeln,
+        difficulty_levels,
+        prefs["selected_lektionen"],
+        prefs["selected_uids"],
+    )
     status = request.args.get("status")
     message = request.args.get("message")
-    has_runtime_key = bool(_load_runtime_secrets().get("OPENAI_API_KEY", "").strip())
+    has_runtime_key = bool(_load_runtime_secrets().get("SYNTEROLINK_API_KEY", "").strip())
     tts_ready = bool(_get_effective_openai_api_key()) and (_get_openai_client() is not None)
     all_vocab = [
         {
@@ -979,13 +1204,18 @@ def learn_home():
     selected_source_id = _source_id_for_path(source_path)
     vokabeln = lade_vokabeln_full(source_path)
     difficulty_levels = _difficulty_levels_for_vocab(vokabeln)
-    difficulty_counts = _difficulty_counts(vokabeln, difficulty_levels)
     lektionen = alle_lektionen(vokabeln)
     valid_uids = {_make_uid(v) for v in vokabeln}
     prefs["selected_lektionen"] = [l for l in prefs.get("selected_lektionen", []) if l in lektionen]
     prefs["selected_uids"] = [u for u in prefs.get("selected_uids", []) if u in valid_uids]
     prefs["selected_difficulties"] = [d for d in prefs.get("selected_difficulties", []) if d in DIFFICULTY_LEVELS]
     prefs["source_id"] = selected_source_id
+    difficulty_counts = _difficulty_counts_for_selection(
+        vokabeln,
+        difficulty_levels,
+        prefs["selected_lektionen"],
+        prefs["selected_uids"],
+    )
     status = request.args.get("status")
     message = request.args.get("message")
     all_vocab = [
@@ -1231,6 +1461,159 @@ def import_csv():
     )
 
 
+@app.post("/import_images")
+def import_images():
+    if not _is_admin():
+        return redirect(url_for("learn_home"))
+
+    uploads = request.files.getlist("image_files")
+    uploads = [u for u in uploads if u and u.filename]
+    if not uploads:
+        return redirect(url_for("index", status="error", message="Bitte mindestens ein Bild auswaehlen."))
+
+    token = _new_import_token()
+    draft_dir = _import_draft_dir(token)
+    draft_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_images = []
+    for idx, upload in enumerate(uploads, start=1):
+        if not _allowed_image_upload(upload.filename):
+            _delete_import_draft(token)
+            return redirect(
+                url_for("index", status="error", message="Nur PNG, JPG, JPEG, WEBP oder BMP sind erlaubt.")
+            )
+        filename = secure_filename(upload.filename) or f"page_{idx}.png"
+        target = (draft_dir / f"{idx:02d}_{filename}").resolve()
+        if not _is_path_within(draft_dir, target):
+            _delete_import_draft(token)
+            return redirect(url_for("index", status="error", message="Ungueltiger Bildname."))
+        upload.save(target)
+        saved_images.append(str(target.name))
+
+    image_paths = [draft_dir / name for name in saved_images]
+    rows, warnings = _ai_extract_vocab_from_images(image_paths)
+    if rows is None:
+        _delete_import_draft(token)
+        return redirect(url_for("index", status="error", message="; ".join(warnings) or "KI-Import fehlgeschlagen."))
+
+    draft_rows = []
+    for row in rows:
+        item = _clean_import_row(row)
+        if item:
+            item["selected"] = True
+            draft_rows.append(item)
+
+    if not draft_rows:
+        _delete_import_draft(token)
+        return redirect(url_for("index", status="error", message="Die KI hat keine verwertbaren Vokabeln geliefert."))
+
+    _save_import_draft(
+        token,
+        {
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "images": saved_images,
+            "rows": draft_rows,
+            "warnings": warnings,
+        },
+    )
+    return redirect(url_for("review_import", token=token))
+
+
+@app.get("/review_import")
+def review_import():
+    token = (request.args.get("token") or "").strip()
+    draft = _load_import_draft(token)
+    if not draft:
+        return redirect(url_for("index", status="error", message="Import-Draft nicht gefunden."))
+    images = []
+    for name in draft.get("images", []):
+        if _import_image_path(token, name):
+            images.append({"name": name, "url": url_for("import_image_file", token=token, filename=name)})
+    draft["image_urls"] = images
+    return render_template("manage_vocab.html", import_draft=draft, import_token=token, import_mode="review")
+
+
+@app.get("/import_image_file")
+def import_image_file():
+    token = (request.args.get("token") or "").strip()
+    filename = (request.args.get("filename") or "").strip()
+    path = _import_image_path(token, filename)
+    if not path:
+        return redirect(url_for("index", status="error", message="Bild nicht gefunden."))
+    return send_file(str(path))
+
+
+@app.post("/confirm_import")
+def confirm_import():
+    token = (request.form.get("import_token") or "").strip()
+    draft = _load_import_draft(token)
+    if not draft:
+        return redirect(url_for("index", status="error", message="Import-Draft nicht gefunden."))
+
+    raw_rows = []
+    idx = 0
+    while True:
+        prefix = f"rows[{idx}]"
+        if prefix + "[fremdsprache]" not in request.form:
+            if idx == 0 and not request.form.getlist("row_selected[]"):
+                break
+            if request.form.get(f"rows[{idx}][fremdsprache]") is None:
+                break
+        row = {
+            "fremdsprache": request.form.get(f"rows[{idx}][fremdsprache]", ""),
+            "deutsch": request.form.get(f"rows[{idx}][deutsch]", ""),
+            "deklination": request.form.get(f"rows[{idx}][deklination]", ""),
+            "lektion": request.form.get(f"rows[{idx}][lektion]", ""),
+            "selected": request.form.get(f"rows[{idx}][selected]") == "on",
+        }
+        if all(not str(row[k]).strip() for k in ("fremdsprache", "deutsch", "deklination", "lektion")):
+            idx += 1
+            if idx > 500:
+                break
+            continue
+        raw_rows.append(row)
+        idx += 1
+        if idx > 500:
+            break
+
+    if not raw_rows:
+        raw_rows = list(draft.get("rows") or [])
+
+    rows = []
+    for row in raw_rows:
+        item = _clean_import_row(row)
+        if item and row.get("selected", True):
+            rows.append(item)
+
+    if not rows:
+        return redirect(url_for("review_import", token=token, status="error", message="Keine Zeilen ausgewaehlt."))
+
+    added = 0
+    duplicates = 0
+    with _locked_vocab_update() as master:
+        existing_uids = {_make_uid(v) for v in master}
+        for row in rows:
+            if not row["fremdsprache"] or not row["deutsch"] or not row["lektion"]:
+                continue
+            row.update({"richtig": 0, "falsch": 0})
+            uid = _make_uid(row)
+            if uid in existing_uids:
+                duplicates += 1
+                continue
+            master.append(row)
+            existing_uids.add(uid)
+            added += 1
+
+    _delete_import_draft(token)
+    if added == 0:
+        return redirect(url_for("index", status="error", message="Alle importierten Eintraege waren Duplikate."))
+
+    msg = f"Bildimport gespeichert: {added} Vokabel(n)."
+    if duplicates:
+        msg += f" Duplikate uebersprungen: {duplicates}."
+    return redirect(url_for("index", status="ok", message=msg))
+
+
 @app.post("/build_tts_cache")
 def build_tts_cache():
     vokabeln = lade_vokabeln_full()
@@ -1242,7 +1625,7 @@ def build_tts_cache():
             url_for(
                 "index",
                 status="error",
-                message="OPENAI_API_KEY fehlt. Bitte in .env setzen und App neu starten.",
+                message="SYNTEROLINK_API_KEY fehlt. Bitte in .env setzen und App neu starten.",
             )
         )
 
@@ -1273,20 +1656,20 @@ def build_tts_cache():
 def set_api_key():
     global _OPENAI_CLIENT
 
-    api_key = (request.form.get("openai_api_key") or "").strip()
+    api_key = (request.form.get("synterolink_api_key") or "").strip()
     secrets = _load_runtime_secrets()
 
     if not api_key:
-        if "OPENAI_API_KEY" in secrets:
-            del secrets["OPENAI_API_KEY"]
+        if "SYNTEROLINK_API_KEY" in secrets:
+            del secrets["SYNTEROLINK_API_KEY"]
             _save_runtime_secrets(secrets)
         _OPENAI_CLIENT = None
-        return redirect(url_for("index", status="ok", message="Browser-API-Key wurde entfernt."))
+        return redirect(url_for("index", status="ok", message="Synterolink-API-Key wurde entfernt."))
 
-    secrets["OPENAI_API_KEY"] = api_key
+    secrets["SYNTEROLINK_API_KEY"] = api_key
     _save_runtime_secrets(secrets)
     _OPENAI_CLIENT = None
-    return redirect(url_for("index", status="ok", message="API-Key im Browser gespeichert."))
+    return redirect(url_for("index", status="ok", message="Synterolink-API-Key im Browser gespeichert."))
 
 
 @app.post("/add_vocab")
@@ -1520,7 +1903,12 @@ def start():
         "last_feedback": None,
     }
     if mode == "kartei":
-        state["kartei"] = _build_kartei_state(queue)
+        kartei = _build_kartei_state(queue)
+        first_box, first_queue = _next_box_queue(kartei["boxes"], 1)
+        kartei["current_box"] = first_box or 1
+        kartei["box_queue"] = first_queue
+        kartei["box_index"] = 0
+        state["kartei"] = kartei
     session["state"] = state
 
     return redirect(url_for("quiz"))
@@ -1652,6 +2040,11 @@ def answer():
         kartei["box_queue"] = box_queue
         kartei["box_index"] = box_index + 1
         kartei["asked_total"] = question_idx + 1
+        if kartei["box_index"] >= len(box_queue):
+            next_box, next_queue = _next_box_queue(boxes, current_box + 1)
+            kartei["current_box"] = next_box or current_box
+            kartei["box_queue"] = next_queue
+            kartei["box_index"] = 0
         state["kartei"] = kartei
         state["index"] = kartei["asked_total"]
     if mode != "kartei" and not correct:
@@ -1750,8 +2143,10 @@ def mark_correct():
             boxes[uid] = 6 if prev_box >= 5 else min(5, prev_box + 1)
         if uid in wrong_counts:
             wrong_counts[uid] = max(0, _to_int(wrong_counts.get(uid, 0)) - 1)
+        box_queue = [str(x) for x in (kartei.get("box_queue") or []) if str(x).strip()]
         kartei["boxes"] = boxes
         kartei["wrong_counts"] = wrong_counts
+        kartei["box_queue"] = box_queue
         state["kartei"] = kartei
     state["last_feedback"] = {"uid": uid, "was_wrong": False, "question_idx": question_idx}
     session["state"] = state
