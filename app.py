@@ -2027,6 +2027,7 @@ def answer():
         if not correct:
             state.setdefault("wrong", []).append(
                 {
+                    "uid": uid,
                     "question_idx": question_idx,
                     "frage": current_display.get("fremdsprache", ""),
                     "expected": expected,
@@ -2050,6 +2051,7 @@ def answer():
     if mode != "kartei" and not correct:
         state.setdefault("wrong", []).append(
             {
+                "uid": queue[idx]["uid"],
                 "question_idx": idx,
                 "frage": queue[idx]["display"].get("fremdsprache", ""),
                 "expected": expected,
@@ -2192,6 +2194,10 @@ def summary():
             )
         kartei_wrong_by_word = sorted(entries, key=lambda x: (-_to_int(x.get("count", 0)), x.get("fremdsprache", "").lower()))
 
+    error_list_sources = [source for source in _available_sources() if source["id"] != DEFAULT_SOURCE_ID]
+    message = request.args.get("message", "")
+    status = request.args.get("status", "")
+
     return render_template(
         "summary.html",
         mode=mode,
@@ -2201,7 +2207,76 @@ def summary():
         wrong=wrong,
         is_kartei=(mode == "kartei"),
         kartei_wrong_by_word=kartei_wrong_by_word,
+        error_list_sources=error_list_sources,
+        message=message,
+        status=status,
     )
+
+
+@app.post("/save_wrong_vocab")
+def save_wrong_vocab():
+    state = session.get("state")
+    if not state:
+        return redirect(url_for(_home_endpoint()))
+
+    wrong_uids = []
+    seen_uids = set()
+    for item in state.get("wrong", []):
+        uid = str(item.get("uid", "") or "").strip()
+        if uid and uid not in seen_uids:
+            wrong_uids.append(uid)
+            seen_uids.add(uid)
+
+    # Include errors from older kartei states that predate stored UIDs.
+    if state.get("mode") == "kartei":
+        for uid, count in (state.get("kartei") or {}).get("wrong_counts", {}).items():
+            if _to_int(count) > 0 and uid not in seen_uids:
+                wrong_uids.append(uid)
+                seen_uids.add(uid)
+
+    pool_by_uid = {item.get("uid", ""): item.get("display", {}) for item in state.get("queue", [])}
+    wrong_words = [pool_by_uid[uid] for uid in wrong_uids if uid in pool_by_uid]
+    if not wrong_words:
+        return redirect(url_for("summary", status="error", message="Keine falschen Vokabeln zum Speichern vorhanden."))
+
+    target_id = (request.form.get("target_id") or "").strip()
+    if target_id == "__new__":
+        filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_Fehlerliste.csv"
+        target_path = (IMPORTS_DIR / filename).resolve()
+        suffix = 2
+        while target_path.exists():
+            target_path = (IMPORTS_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_Fehlerliste_{suffix}.csv").resolve()
+            suffix += 1
+    else:
+        target_path = _resolve_source_from_id(target_id)
+        if target_path == VOKABEL_DATEI or not _is_path_within(IMPORTS_DIR, target_path):
+            return redirect(url_for("summary", status="error", message="Bitte eine gueltige Fehlerliste auswaehlen."))
+
+    with DATA_LOCK:
+        existing = lade_vokabeln_full(target_path) if target_path.exists() else []
+        existing_uids = {_make_uid(v) for v in existing}
+        added = 0
+        for word in wrong_words:
+            uid = _make_uid(word)
+            if uid in existing_uids:
+                continue
+            existing.append(
+                {
+                    "fremdsprache": word.get("fremdsprache", ""),
+                    "deutsch": word.get("deutsch", ""),
+                    "deklination": word.get("deklination", ""),
+                    "lektion": word.get("lektion", ""),
+                    "richtig": 0,
+                    "falsch": 0,
+                }
+            )
+            existing_uids.add(uid)
+            added += 1
+        _write_vokabeln(target_path, existing)
+
+    action = "erstellt" if target_id == "__new__" else "aktualisiert"
+    message = f"Fehlerliste {action}: {target_path.name} ({added} neue Vokabel(n))."
+    return redirect(url_for("summary", status="ok", message=message))
 
 
 @app.post("/reset")

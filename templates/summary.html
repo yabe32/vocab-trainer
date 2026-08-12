@@ -20,6 +20,10 @@
       <p><strong>Richtig:</strong> {{ correct_count }}</p>
       <p><strong>Falsch:</strong> {{ wrong_count }}</p>
 
+      {% if message %}
+        <div class="card {{ 'ok' if status == 'ok' else 'error' }}">{{ message }}</div>
+      {% endif %}
+
       {% if is_kartei %}
         <h2>Fehler pro Wort</h2>
         {% if kartei_wrong_by_word %}
@@ -38,6 +42,25 @@
             <li>{{ item.frage }} -> {{ item.expected }} (deine Antwort: {{ item.answer or '(leer)' }})</li>
           {% endfor %}
         </ul>
+      {% endif %}
+
+      {% if mode == 'block' and wrong_count > 0 %}
+        <div class="card grid">
+          <h2>Falsche Vokabeln speichern</h2>
+          <p class="hint">Jede falsche Vokabel wird nur einmal gespeichert. Beim Anhaengen werden Duplikate uebersprungen.</p>
+          <form action="{{ url_for('save_wrong_vocab') }}" method="post" class="grid">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <label>Fehlerliste
+              <select name="target_id" required>
+                <option value="__new__">Neue Fehlerliste erstellen</option>
+                {% for source in error_list_sources %}
+                  <option value="{{ source.id }}">An Fehlerliste anhängen: {{ source.label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <button type="submit">Falsche Vokabeln speichern</button>
+          </form>
+        </div>
       {% endif %}
 
       <form action="{{ url_for('reset_state') }}" method="post">
