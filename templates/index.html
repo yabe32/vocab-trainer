@@ -22,17 +22,23 @@
     {% if error %}
       <div class="card error">{{ error }}</div>
     {% else %}
-      <form action="{{ url_for('start') }}" method="post" class="card grid" id="learn-form">
+      <form action="{{ url_for('set_source') }}" method="post" class="card grid" id="source-form">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="index">
         <h2>Lernen starten</h2>
 
         <label>Quelle
-          <select name="source_id">
+          <select name="source_id" id="source-select" onchange="this.form.submit()">
             {% for s in sources %}
               <option value="{{ s.id }}" {% if selected_source_id == s.id %}selected{% endif %}>{{ s.label }}</option>
             {% endfor %}
           </select>
         </label>
+      </form>
+
+      <form action="{{ url_for('start') }}" method="post" class="card grid" id="learn-form">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="source_id" id="start-source-id" value="{{ selected_source_id }}">
 
         <label>Modus
           <select name="mode" id="mode-select">
@@ -193,6 +199,8 @@
 
   <script>
     const modeSelect = document.getElementById('mode-select');
+    const sourceSelect = document.getElementById('source-select');
+    const startSourceId = document.getElementById('start-source-id');
     const blockSettings = document.getElementById('block-settings');
     const autoAudioSettings = document.getElementById('auto-audio-settings');
     const throughSettings = document.getElementById('through-settings');
@@ -295,6 +303,11 @@
     if (modeSelect) {
       modeSelect.addEventListener('change', toggleModeSections);
       toggleModeSections();
+    }
+    if (sourceSelect && startSourceId) {
+      sourceSelect.addEventListener('change', () => {
+        startSourceId.value = sourceSelect.value;
+      });
     }
     document.querySelectorAll('input[name="lektionen"]').forEach(cb => cb.addEventListener('change', refreshBlockPreview));
     wordCheckboxes.forEach(cb => cb.addEventListener('change', refreshBlockPreview));

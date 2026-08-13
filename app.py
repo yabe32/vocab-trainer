@@ -1246,6 +1246,23 @@ def learn_home():
     )
 
 
+@app.post("/set_source")
+def set_source():
+    source_id = (request.form.get("source_id") or DEFAULT_SOURCE_ID).strip()
+    source_path = _resolve_source_from_id(source_id)
+    source_id = _source_id_for_path(source_path)
+
+    prefs = _load_learning_prefs()
+    prefs["source_id"] = source_id
+    session["learning_prefs"] = prefs
+
+    next_target = (request.form.get("next") or "").strip()
+    if next_target not in {"index", "learn_home"}:
+        next_target = _home_endpoint() if _current_role() in {"admin", "learner"} else "access_gate"
+
+    return redirect(url_for(next_target))
+
+
 @app.get("/access")
 def access_gate():
     if _current_role() in {"admin", "learner"}:
